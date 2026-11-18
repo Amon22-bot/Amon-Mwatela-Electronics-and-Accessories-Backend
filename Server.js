@@ -1,22 +1,38 @@
+```javascript
+// =========================================================
+// AM ELECTRONICS AND ACCESSORIES
+// MAIN BACKEND SERVER
+// =========================================================
+
 const express = require("express");
 const dotenv = require("dotenv");
 const mongoose = require("mongoose");
 const cors = require("cors");
 const http = require("http");
-const path = require("path");
 const { Server } = require("socket.io");
 
-// Load environment variables.
-dotenv.config({
-    path: path.join(__dirname, ".env")
-});
+// =========================================================
+// LOAD ENVIRONMENT VARIABLES
+// =========================================================
 
-// Route imports. Folder name is Routes with a capital R.
+dotenv.config();
+
+
+// =========================================================
+// IMPORT API ROUTES
+// =========================================================
+
 const productRoutes = require("./Routes/productRoutes");
 const orderRoutes = require("./Routes/orderRoutes");
 const siteAssetRoutes = require("./Routes/siteAssetRoutes");
 
+
+// =========================================================
+// INITIALIZE EXPRESS AND HTTP SERVER
+// =========================================================
+
 const app = express();
+
 const server = http.createServer(app);
 
 
@@ -25,26 +41,40 @@ const server = http.createServer(app);
 // =========================================================
 
 const allowedOrigins = new Set([
+
+    // Local development
     "http://127.0.0.1:5500",
     "http://localhost:5500",
     "http://127.0.0.1:3000",
     "http://localhost:3000",
+
+    // Production frontend origins
     ...(process.env.FRONTEND_ORIGINS || "")
         .split(",")
-        .map(origin => origin.trim())
+        .map(origin => origin.trim().replace(/\/$/, ""))
         .filter(Boolean)
+
 ]);
 
+
 const corsOptions = {
+
     origin(origin, callback) {
 
+        // Allow requests without an origin, such as server-to-server requests.
+        if (!origin) {
+            return callback(null, true);
+        }
+
+        // Allow configured website origins.
+        if (allowedOrigins.has(origin)) {
+            return callback(null, true);
+        }
+
+        // Allow null origins only during local development.
         if (
-            !origin ||
-            allowedOrigins.has(origin) ||
-            (
-                origin === "null" &&
-                process.env.NODE_ENV !== "production"
-            )
+            origin === "null" &&
+            process.env.NODE_ENV !== "production"
         ) {
             return callback(null, true);
         }
@@ -52,19 +82,30 @@ const corsOptions = {
         return callback(
             new Error("This website origin is not allowed by CORS.")
         );
+
     },
 
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+    methods: [
+        "GET",
+        "POST",
+        "PUT",
+        "PATCH",
+        "DELETE",
+        "OPTIONS"
+    ],
 
     allowedHeaders: [
         "Content-Type",
         "Authorization"
-    ]
+    ],
+
+    credentials: true
+
 };
 
 
 // =========================================================
-// MIDDLEWARE
+// GLOBAL MIDDLEWARE
 // =========================================================
 
 app.use(cors(corsOptions));
@@ -73,15 +114,24 @@ app.use(express.json({
     limit: "8mb"
 }));
 
+app.use(express.urlencoded({
+    extended: true,
+    limit: "8mb"
+}));
+
 
 // =========================================================
-// SOCKET.IO
+// SOCKET.IO CONFIGURATION
 // =========================================================
 
 const io = new Server(server, {
+
     cors: corsOptions
+
 });
 
+
+// Make Socket.IO available inside API routes.
 app.set("io", io);
 
 
@@ -91,9 +141,20 @@ app.set("io", io);
 
 app.get("/health", (req, res) => {
 
+    const databaseConnected = mongoose.connection.readyState === 1;
+
     res.status(200).json({
+
         success: true,
-        message: "AM Electronics backend is running."
+
+        message: "AM Electronics backend is running.",
+
+        database: databaseConnected
+            ? "Connected"
+            : "Disconnected",
+
+        timestamp: new Date().toISOString()
+
     });
 
 });
@@ -103,46 +164,89 @@ app.get("/health", (req, res) => {
 // API ROUTES
 // =========================================================
 
-// Product management
+// Product management and product retrieval.
 app.use("/api/products", productRoutes);
 
-// Order management and admin authentication
+
+// Customer orders and admin order management.
 app.use("/api/orders", orderRoutes);
 
-// Central website image management using MongoDB GridFS
+
+// Website assets, hero images and image management.
 app.use("/api/site-assets", siteAssetRoutes);
 
 
 // =========================================================
-// STATIC FRONTEND SERVING
+// API ROOT
 // =========================================================
-
-const clientDirectory = path.join(__dirname, "..", "client");
 
 app.get("/", (req, res) => {
 
-    res.sendFile(
-        path.join(clientDirectory, "Index.html")
-    );
+    res.status(200).json({
+
+        success: true,
+
+        name: "AM Electronics and Accessories API",
+
+        message: "Welcome to the AM Electronics backend.",
+
+        endpoints: {
+
+            health: "/health",
+
+            products: "/api/products",
+
+            orders: "/api/orders",
+
+            siteAssets: "/api/site-assets"
+
+        }
+
+    });
 
 });
 
-app.use(express.static(clientDirectory, {
 
-    setHeaders(res, filePath) {
+// =========================================================
+// 404 HANDLER
+// =========================================================
 
-        if (
-            path.extname(filePath).toLowerCase() === ".enc"
-        ) {
-            res.setHeader(
-                "Content-Type",
-                "image/webp"
-            );
-        }
+app.use((req, res) => {
 
+    res.status(404).json({
+
+        success: false,
+
+        message: "The requested API endpoint was not found."
+
+    });
+
+});
+
+
+// =========================================================
+// GLOBAL ERROR HANDLER
+// =========================================================
+
+app.use((err, req, res, next) => {
+
+    console.error("Backend error:", err);
+
+    if (res.headersSent) {
+        return next(err);
     }
 
-}));
+    res.status(err.status || 500).json({
+
+        success: false,
+
+        message: process.env.NODE_ENV === "production"
+            ? "An unexpected server error occurred."
+            : err.message
+
+    });
+
+});
 
 
 // =========================================================
@@ -155,6 +259,7 @@ io.on("connection", (socket) => {
         "A client connected:",
         socket.id
     );
+
 
     socket.on("disconnect", () => {
 
@@ -176,22 +281,30 @@ async function startServer() {
 
     try {
 
+        // Check MongoDB connection string.
         if (!process.env.MONGO_URI) {
 
             throw new Error(
-                "MONGO_URI is missing. Check your server/.env configuration."
+                "MONGO_URI is missing. Configure it in Render environment variables."
             );
 
         }
 
+
+        // Connect to MongoDB.
         await mongoose.connect(process.env.MONGO_URI);
+
 
         console.log(
             "Successfully connected to MongoDB."
         );
 
+
+        // Render automatically provides the PORT environment variable.
         const PORT = process.env.PORT || 5000;
 
+
+        // Start HTTP and Socket.IO server.
         server.listen(PORT, "0.0.0.0", () => {
 
             console.log(
@@ -207,13 +320,30 @@ async function startServer() {
             error.message
         );
 
-        process.exitCode = 1;
+        process.exit(1);
 
     }
 
 }
 
+
+// =========================================================
+// HANDLE UNEXPECTED SERVER ERRORS
+// =========================================================
+
+process.on("unhandledRejection", (reason) => {
+
+    console.error(
+        "Unhandled promise rejection:",
+        reason
+    );
+
+});
+
+
+// =========================================================
+// START APPLICATION
+// =========================================================
+
 startServer();
-
-
-
+```
