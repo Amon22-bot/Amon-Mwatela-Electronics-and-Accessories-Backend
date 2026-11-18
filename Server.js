@@ -1,4 +1,4 @@
-```javascript
+
 // =========================================================
 // AM ELECTRONICS AND ACCESSORIES
 // MAIN BACKEND SERVER
@@ -346,4 +346,3 @@ process.on("unhandledRejection", (reason) => {
 // =========================================================
 
 startServer();
-```
