@@ -1,4 +1,3 @@
-
 "use strict";
 
 const express = require("express");
@@ -18,6 +17,7 @@ const {
 
 const router = express.Router();
 
+
 /* =========================================
    CONFIGURATION
 ========================================= */
@@ -36,8 +36,18 @@ const BUCKET_NAME = "siteAssets";
 const ASSET_TYPES = {
     LOGO: "logo",
     HERO: "hero",
-    CATEGORY: "category"
+    CATEGORY: "category",
+    COLLECTION: "collection"
 };
+
+const COLLECTION_KEYS = [
+    "collection-trending",
+    "collection-featured",
+    "collection-recommended",
+    "collection-must-have",
+    "collection-explore"
+];
+
 
 /* =========================================
    GRIDFS CONNECTION
@@ -63,6 +73,7 @@ function getBucket() {
 
     return gridFSBucket;
 }
+
 
 /* =========================================
    MULTER CONFIGURATION
@@ -91,6 +102,7 @@ const upload = multer({
     }
 });
 
+
 /* =========================================
    ASSET KEY VALIDATION
 ========================================= */
@@ -101,6 +113,7 @@ function isValidAssetKey(key) {
         /^[a-z0-9-]{1,80}$/.test(key)
     );
 }
+
 
 /* =========================================
    IMAGE CONTENT VALIDATION
@@ -149,6 +162,7 @@ function isValidImageBuffer(buffer, mimeType) {
     }
 }
 
+
 /* =========================================
    ASSET TYPE VALIDATION
 ========================================= */
@@ -166,8 +180,13 @@ function getExpectedAssetType(key) {
         return ASSET_TYPES.CATEGORY;
     }
 
+    if (COLLECTION_KEYS.includes(key)) {
+        return ASSET_TYPES.COLLECTION;
+    }
+
     return null;
 }
+
 
 /* =========================================
    GRIDFS IMAGE UPLOAD
@@ -202,6 +221,7 @@ function saveImage(file, key, type) {
     });
 }
 
+
 /* =========================================
    GRIDFS IMAGE DELETION
 ========================================= */
@@ -218,14 +238,9 @@ async function deleteImage(fileId) {
     await bucket.delete(objectId);
 }
 
+
 /* =========================================
    FORMAT ASSET RESPONSE
-
-   PUBLIC:
-   /api/site-assets/image/:fileId
-
-   ADMIN:
-   /api/site-assets/admin/image/:fileId
 ========================================= */
 
 function formatAsset(asset, isAdmin = false) {
@@ -263,11 +278,9 @@ function formatAsset(asset, isAdmin = false) {
     };
 }
 
+
 /* =========================================
    STREAM GRIDFS IMAGE
-
-   Admin requests can retrieve inactive assets.
-   Public requests can retrieve active assets only.
 ========================================= */
 
 async function streamGridFSImage(req, res, isAdmin = false) {
@@ -372,10 +385,9 @@ async function streamGridFSImage(req, res, isAdmin = false) {
     }
 }
 
+
 /* =========================================
    PUBLIC ASSET LIST
-
-   Returns active assets only.
 ========================================= */
 
 router.get("/", async (req, res) => {
@@ -414,12 +426,9 @@ router.get("/", async (req, res) => {
     }
 });
 
+
 /* =========================================
    ADMIN ASSET LIST
-
-   Returns active AND inactive assets.
-
-   Protected by requireAdmin.
 ========================================= */
 
 router.get(
@@ -455,10 +464,9 @@ router.get(
     }
 );
 
+
 /* =========================================
    PUBLIC IMAGE ENDPOINT
-
-   Only active images can be accessed.
 ========================================= */
 
 router.get(
@@ -468,14 +476,9 @@ router.get(
     }
 );
 
+
 /* =========================================
    PROTECTED ADMIN IMAGE ENDPOINT
-
-   Allows the admin manager to preview active
-   and inactive images.
-
-   The frontend must send the Bearer token
-   using fetch() and display the returned blob.
 ========================================= */
 
 router.get(
@@ -485,6 +488,7 @@ router.get(
         return streamGridFSImage(req, res, true);
     }
 );
+
 
 /* =========================================
    UPLOAD OR REPLACE WEBSITE IMAGE
@@ -549,8 +553,6 @@ router.post(
                 key
             });
 
-            /* Save the new image to GridFS first. */
-
             newFileId = await saveImage(
                 req.file,
                 key,
@@ -596,12 +598,6 @@ router.post(
 
             databaseUpdated = true;
 
-            /*
-                Delete the old GridFS image only after
-                the database successfully references
-                the new image.
-            */
-
             if (
                 existingAsset?.fileId &&
                 existingAsset.fileId.toString() !== newFileId.toString()
@@ -629,11 +625,6 @@ router.post(
                 error
             );
 
-            /*
-                Only remove the new file if the database
-                update did not succeed.
-            */
-
             if (newFileId && !databaseUpdated) {
                 try {
                     await deleteImage(newFileId);
@@ -653,10 +644,9 @@ router.post(
     }
 );
 
-/* =========================================
-   REORDER HERO SLIDES
 
-   Must appear before PATCH /:key.
+/* =========================================
+   REORDER HERO AND COLLECTION SLIDES
 ========================================= */
 
 router.patch(
@@ -664,12 +654,25 @@ router.patch(
     requireAdmin,
     async (req, res) => {
         try {
-            const items = req.body.items;
+            const {
+                items,
+                type = "hero"
+            } = req.body;
 
             if (!Array.isArray(items)) {
                 return res.status(400).json({
                     success: false,
                     message: "Provide an items array containing slide keys and order values."
+                });
+            }
+
+            if (
+                type !== ASSET_TYPES.HERO &&
+                type !== ASSET_TYPES.COLLECTION
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Only hero and collection slides can be reordered."
                 });
             }
 
@@ -679,19 +682,27 @@ router.patch(
             for (const item of items) {
                 if (
                     !item ||
-                    !isValidAssetKey(item.key) ||
-                    !/^hero-slide-[1-5]$/.test(item.key)
+                    !isValidAssetKey(item.key)
                 ) {
                     return res.status(400).json({
                         success: false,
-                        message: "One or more hero slide keys are invalid."
+                        message: "One or more slide keys are invalid."
+                    });
+                }
+
+                const expectedType = getExpectedAssetType(item.key);
+
+                if (expectedType !== type) {
+                    return res.status(400).json({
+                        success: false,
+                        message: "One or more slide keys do not match the selected slide type."
                     });
                 }
 
                 if (seenKeys.has(item.key)) {
                     return res.status(400).json({
                         success: false,
-                        message: "Duplicate hero slide keys are not allowed."
+                        message: "Duplicate slide keys are not allowed."
                     });
                 }
 
@@ -702,7 +713,7 @@ router.patch(
                 if (!Number.isInteger(order) || order < 0) {
                     return res.status(400).json({
                         success: false,
-                        message: "Hero slide order values must be non-negative integers."
+                        message: "Slide order values must be non-negative integers."
                     });
                 }
 
@@ -716,7 +727,7 @@ router.patch(
                 updateOne: {
                     filter: {
                         key: item.key,
-                        type: ASSET_TYPES.HERO
+                        type
                     },
 
                     update: {
@@ -734,25 +745,28 @@ router.patch(
 
             return res.status(200).json({
                 success: true,
-                message: "Hero slide order updated."
+                message: type === ASSET_TYPES.HERO
+                    ? "Hero slide order updated."
+                    : "Collection slide order updated."
             });
 
         } catch (error) {
             console.error(
-                "Hero slide reordering failed:",
+                "Website slide reordering failed:",
                 error
             );
 
             return res.status(500).json({
                 success: false,
-                message: "Could not reorder hero slides."
+                message: "Could not reorder website slides."
             });
         }
     }
 );
 
+
 /* =========================================
-   UPDATE HERO SLIDE DETAILS
+   UPDATE HERO OR COLLECTION SLIDE DETAILS
 ========================================= */
 
 router.patch(
@@ -769,15 +783,27 @@ router.patch(
                 });
             }
 
+            const expectedType = getExpectedAssetType(key);
+
+            if (
+                expectedType !== ASSET_TYPES.HERO &&
+                expectedType !== ASSET_TYPES.COLLECTION
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Only hero and collection slide details can be edited."
+                });
+            }
+
             const asset = await SiteAsset.findOne({
                 key,
-                type: ASSET_TYPES.HERO
+                type: expectedType
             });
 
             if (!asset) {
                 return res.status(404).json({
                     success: false,
-                    message: "Hero slide not found."
+                    message: "Website slide not found."
                 });
             }
 
@@ -827,29 +853,28 @@ router.patch(
 
             return res.status(200).json({
                 success: true,
-                message: "Hero slide updated successfully.",
+                message: "Website slide updated successfully.",
 
                 asset: formatAsset(asset, true)
             });
 
         } catch (error) {
             console.error(
-                "Hero slide update failed:",
+                "Website slide update failed:",
                 error
             );
 
             return res.status(500).json({
                 success: false,
-                message: "Could not update hero slide."
+                message: "Could not update website slide."
             });
         }
     }
 );
 
+
 /* =========================================
    DELETE WEBSITE IMAGE
-
-   Removes the replacement and its metadata.
 ========================================= */
 
 router.delete(
@@ -911,6 +936,7 @@ router.delete(
     }
 );
 
+
 /* =========================================
    MULTER AND UPLOAD ERROR HANDLER
 ========================================= */
@@ -949,5 +975,6 @@ router.use((error, req, res, next) => {
 
     next();
 });
+
 
 module.exports = router;
