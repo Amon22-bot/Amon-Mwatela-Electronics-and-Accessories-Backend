@@ -1,4 +1,3 @@
-
 /* =========================================================
    AM ELECTRONICS AND ACCESSORIES
    PRODUCT DATABASE MODEL
@@ -39,7 +38,6 @@ const PRODUCT_CATEGORIES = [
 ========================================================= */
 
 const HOMEPAGE_PLACEMENTS = [
-    // Existing homepage sections
     'top-selling',
     'covers',
     'new-arrivals',
@@ -89,7 +87,6 @@ const ProductSchema = new mongoose.Schema({
 
 
     // PRODUCT DESCRIPTION
-    // Optional because the admin form allows an empty description.
     description: {
         type: String,
         trim: true,
@@ -183,8 +180,6 @@ const ProductSchema = new mongoose.Schema({
 
 
     // ACTUAL PRODUCT CATEGORY
-    // Describes what the product is.
-    // Separate from homepage placement.
     category: {
         type: String,
         default: null,
@@ -201,20 +196,7 @@ const ProductSchema = new mongoose.Schema({
     },
 
 
-    // OPTIONAL SHOP BADGE
-    shopBadge: {
-        type: String,
-        enum: [
-            'none',
-            'new-arrival',
-            'top-seller'
-        ],
-        default: 'none'
-    },
-
-
     // MULTIPLE HOMEPAGE PLACEMENTS
-    // One product can appear in several homepage sections.
     placements: {
         type: [{
             type: String,
@@ -359,5 +341,3 @@ ProductSchema.index({
 module.exports =
     mongoose.models.Product ||
     mongoose.model('Product', ProductSchema);
-
-
