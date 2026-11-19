@@ -1,3 +1,4 @@
+"use strict";
 
 /* =========================================================
    AM ELECTRONICS AND ACCESSORIES
@@ -20,8 +21,7 @@
    12. Retrieve product images from GridFS.
    13. Delete associated GridFS images.
    14. Support legacy product records.
-   15. Enforce a maximum of 10 products per
-       homepage product placement.
+   15. Enforce maximum 10 products per homepage placement.
 
    GRIDFS BUCKET:
    productImages
@@ -30,15 +30,18 @@
    4 total (1 main + 3 additional).
 ========================================================= */
 
-const express = require('express');
-const mongoose = require('mongoose');
-const multer = require('multer');
-const path = require('path');
+const express = require("express");
+const mongoose = require("mongoose");
+const multer = require("multer");
+const path = require("path");
 
 const router = express.Router();
 
-const Product = require('../Models/Product');
-const { requireAdmin } = require('../Middleware/adminAuth');
+const Product = require("../Models/Product");
+
+const {
+    requireAdmin
+} = require("../Middleware/adminAuth");
 
 
 /* =========================================================
@@ -51,12 +54,7 @@ const MAX_PRODUCT_IMAGES = 4;
 
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
 
-const PRODUCT_IMAGE_BUCKET = 'productImages';
-
-
-/*
-   Use the approved configuration from Product.js.
-*/
+const PRODUCT_IMAGE_BUCKET = "productImages";
 
 const HOMEPAGE_PRODUCT_PLACEMENTS =
     Product.HOMEPAGE_PRODUCT_PLACEMENTS;
@@ -64,61 +62,296 @@ const HOMEPAGE_PRODUCT_PLACEMENTS =
 const ADDITIONAL_SHOP_COLLECTIONS =
     Product.ADDITIONAL_SHOP_COLLECTIONS;
 
-const LEGACY_COMPATIBLE_PLACEMENTS =
-    Product.LEGACY_COMPATIBLE_PLACEMENTS;
-
 const PRODUCT_CATEGORIES =
     Product.PRODUCT_CATEGORIES.filter(category =>
-        !['top-selling', 'new-arrivals'].includes(category)
+        !["top-selling", "new-arrivals"].includes(category)
     );
 
 
 /* =========================================================
-   2. CATEGORY AND COLLECTION LABELS
+   2. LABELS
 ========================================================= */
 
 const CATEGORY_LABELS = {
 
-    'top-selling': 'Top Selling',
-    'new-arrivals': 'New Arrivals',
+    "top-selling": "Top Selling",
+    "new-arrivals": "New Arrivals",
 
-    'covers': 'Phone Covers',
-    'screen-protectors': 'Screen Protectors',
-    'headphones-earpods': 'Headphones & Earpods',
-    'smartwatches': 'Smartwatches',
-    'chargers-cables': 'Chargers & Cables',
-    'power-banks': 'Power Banks',
+    "covers": "Phone Covers",
+    "screen-protectors": "Screen Protectors",
+    "headphones-earpods": "Headphones & Earpods",
+    "smartwatches": "Smartwatches",
+    "chargers-cables": "Chargers & Cables",
+    "power-banks": "Power Banks",
 
-    'phones': 'Phones',
-    'bluetooth-speakers': 'Bluetooth Speakers',
-    'ring-lights': 'Ring Lights',
+    "gaming-accessories": "Gaming Accessories",
+    "photography-lighting": "Photography & Lighting",
+    "audio-sound": "Audio & Sound",
+    "storage-memory": "Storage & Memory",
+    "computer-accessories": "Computer Accessories",
 
-    'gaming-accessories': 'Gaming Accessories',
-    'photography-lighting': 'Photography & Lighting',
-    'audio-sound': 'Audio & Sound',
-    'storage-memory': 'Storage & Memory',
-    'computer-accessories': 'Computer Accessories',
-
-    'trending': 'Trending',
-    'featured': 'Featured',
-    'recommended': 'Recommended',
-    'must-have': 'Must Have',
-    'explore': 'Explore'
+    "trending": "Trending",
+    "featured": "Featured",
+    "recommended": "Recommended",
+    "must-have": "Must Have",
+    "explore": "Explore"
 
 };
 
 
 /* =========================================================
-   3. GRIDFS CONFIGURATION
+   3. GENERAL HELPERS
 ========================================================= */
 
+function escapeRegex(value) {
 
-/*
-   Get the product image GridFS bucket.
+    return String(value).replace(
+        /[.*+?^${}()|[\]\\]/g,
+        "\\$&"
+    );
 
-   This bucket is separate from the existing siteAssets
-   bucket used for logos, hero slides and category images.
-*/
+}
+
+
+function normaliseArray(value) {
+
+    if (Array.isArray(value)) {
+
+        return value
+            .map(item => String(item).trim())
+            .filter(Boolean);
+
+    }
+
+    if (typeof value !== "string" || !value.trim()) {
+
+        return [];
+
+    }
+
+    const trimmed = value.trim();
+
+    try {
+
+        const parsed = JSON.parse(trimmed);
+
+        if (Array.isArray(parsed)) {
+
+            return normaliseArray(parsed);
+
+        }
+
+    } catch (error) {
+
+        // Continue with ordinary text.
+
+    }
+
+    return trimmed
+        .split(/[\n,]+/)
+        .map(item => item.trim())
+        .filter(Boolean);
+
+}
+
+
+function normaliseSpecifications(value) {
+
+    if (Array.isArray(value)) {
+
+        return value
+
+            .map(item => {
+
+                if (
+                    item &&
+                    typeof item === "object" &&
+                    !Array.isArray(item)
+                ) {
+
+                    return {
+
+                        name: String(
+                            item.name ||
+                            item.label ||
+                            ""
+                        ).trim(),
+
+                        value: String(
+                            item.value || ""
+                        ).trim()
+
+                    };
+
+                }
+
+                return {
+
+                    name: "",
+
+                    value: String(item).trim()
+
+                };
+
+            })
+
+            .filter(item =>
+                item.name || item.value
+            );
+
+    }
+
+    if (typeof value !== "string" || !value.trim()) {
+
+        return [];
+
+    }
+
+    try {
+
+        const parsed = JSON.parse(value);
+
+        if (Array.isArray(parsed)) {
+
+            return normaliseSpecifications(parsed);
+
+        }
+
+    } catch (error) {
+
+        // Continue with ordinary text.
+
+    }
+
+    return value
+
+        .split("\n")
+
+        .map(line => line.trim())
+
+        .filter(Boolean)
+
+        .map(line => {
+
+            const separatorIndex = line.indexOf(":");
+
+            if (separatorIndex === -1) {
+
+                return {
+
+                    name: "",
+
+                    value: line
+
+                };
+
+            }
+
+            return {
+
+                name: line.slice(0, separatorIndex).trim(),
+
+                value: line.slice(
+                    separatorIndex + 1
+                ).trim()
+
+            };
+
+        })
+
+        .filter(item =>
+            item.name || item.value
+        );
+
+}
+
+
+function normaliseBoolean(value) {
+
+    if (typeof value === "boolean") {
+
+        return value;
+
+    }
+
+    if (typeof value === "string") {
+
+        const normalised =
+            value.trim().toLowerCase();
+
+        if (
+            ["true", "1", "yes"].includes(normalised)
+        ) {
+
+            return true;
+
+        }
+
+        if (
+            ["false", "0", "no"].includes(normalised)
+        ) {
+
+            return false;
+
+        }
+
+    }
+
+    if (typeof value === "number") {
+
+        if (value === 1) return true;
+
+        if (value === 0) return false;
+
+    }
+
+    return null;
+
+}
+
+
+function unique(values) {
+
+    return [
+        ...new Set(values)
+    ];
+
+}
+
+
+function isValidProductCategory(category) {
+
+    return (
+        typeof category === "string" &&
+        PRODUCT_CATEGORIES.includes(category)
+    );
+
+}
+
+
+function isValidHomepagePlacement(placement) {
+
+    return (
+        typeof placement === "string" &&
+        HOMEPAGE_PRODUCT_PLACEMENTS.includes(placement)
+    );
+
+}
+
+
+function isValidShopCollection(collection) {
+
+    return (
+        typeof collection === "string" &&
+        ADDITIONAL_SHOP_COLLECTIONS.includes(collection)
+    );
+
+}
+
+
+/* =========================================================
+   4. GRIDFS CONFIGURATION
+========================================================= */
 
 function getProductImageBucket() {
 
@@ -128,7 +361,7 @@ function getProductImageBucket() {
     ) {
 
         throw new Error(
-            'MongoDB connection is not ready.'
+            "MongoDB connection is not ready."
         );
 
     }
@@ -146,13 +379,6 @@ function getProductImageBucket() {
 }
 
 
-/*
-   Generate the public backend URL.
-
-   This ensures product image URLs point to the backend
-   rather than the GitHub Pages frontend.
-*/
-
 function getBackendBaseUrl(req) {
 
     const configuredUrl =
@@ -161,22 +387,18 @@ function getBackendBaseUrl(req) {
 
     if (configuredUrl) {
 
-        return configuredUrl.replace(/\/+$/, '');
+        return configuredUrl.replace(/\/+$/, "");
 
     }
 
     const protocol =
-        req.get('x-forwarded-proto') ||
+        req.get("x-forwarded-proto") ||
         req.protocol;
 
-    return `${protocol}://${req.get('host')}`;
+    return `${protocol}://${req.get("host")}`;
 
 }
 
-
-/*
-   Generate a public GridFS image URL.
-*/
 
 function getProductImageUrl(req, fileId) {
 
@@ -189,7 +411,7 @@ function getProductImageUrl(req, fileId) {
 
 
 /* =========================================================
-   4. MULTER IMAGE UPLOAD CONFIGURATION
+   5. MULTER IMAGE UPLOAD
 ========================================================= */
 
 const storage = multer.memoryStorage();
@@ -210,21 +432,19 @@ const imageUpload = multer({
 
         const allowedTypes = [
 
-            'image/jpeg',
-            'image/png',
-            'image/webp',
-            'image/gif'
+            "image/jpeg",
+            "image/png",
+            "image/webp",
+            "image/gif"
 
         ];
 
         if (!allowedTypes.includes(file.mimetype)) {
 
             return callback(
-
                 new Error(
-                    'Only JPEG, PNG, WEBP and GIF images are allowed.'
+                    "Only JPEG, PNG, WEBP and GIF images are allowed."
                 )
-
             );
 
         }
@@ -236,16 +456,10 @@ const imageUpload = multer({
 });
 
 
-/*
-   Accept uploaded images under the "images" field.
-
-   Maximum: Four files.
-*/
-
 function handleProductImages(req, res, next) {
 
     imageUpload.array(
-        'images',
+        "images",
         MAX_PRODUCT_IMAGES
     )(req, res, error => {
 
@@ -257,23 +471,23 @@ function handleProductImages(req, res, next) {
 
         if (error instanceof multer.MulterError) {
 
-            if (error.code === 'LIMIT_FILE_SIZE') {
+            if (error.code === "LIMIT_FILE_SIZE") {
 
                 return res.status(400).json({
 
                     message:
-                        'Each product image must be 5 MB or smaller.'
+                        "Each product image must be 5 MB or smaller."
 
                 });
 
             }
 
-            if (error.code === 'LIMIT_FILE_COUNT') {
+            if (error.code === "LIMIT_FILE_COUNT") {
 
                 return res.status(400).json({
 
                     message:
-                        'A product can have a maximum of four images.'
+                        "A product can have a maximum of four images."
 
                 });
 
@@ -289,8 +503,9 @@ function handleProductImages(req, res, next) {
 
         return res.status(400).json({
 
-            message: error.message ||
-                'Product image upload failed.'
+            message:
+                error.message ||
+                "Product image upload failed."
 
         });
 
@@ -300,16 +515,8 @@ function handleProductImages(req, res, next) {
 
 
 /* =========================================================
-   5. IMAGE FILE VALIDATION
+   6. IMAGE SIGNATURE VALIDATION
 ========================================================= */
-
-
-/*
-   Validate actual image signatures.
-
-   This provides additional protection beyond checking
-   the uploaded MIME type.
-*/
 
 function isValidImageBuffer(buffer, mimeType) {
 
@@ -319,7 +526,7 @@ function isValidImageBuffer(buffer, mimeType) {
 
     }
 
-    if (mimeType === 'image/jpeg') {
+    if (mimeType === "image/jpeg") {
 
         return (
             buffer.length >= 3 &&
@@ -330,7 +537,7 @@ function isValidImageBuffer(buffer, mimeType) {
 
     }
 
-    if (mimeType === 'image/png') {
+    if (mimeType === "image/png") {
 
         return (
             buffer.length >= 8 &&
@@ -344,24 +551,24 @@ function isValidImageBuffer(buffer, mimeType) {
 
     }
 
-    if (mimeType === 'image/gif') {
+    if (mimeType === "image/gif") {
 
         const signature =
-            buffer.subarray(0, 6).toString('ascii');
+            buffer.subarray(0, 6).toString("ascii");
 
         return (
-            signature === 'GIF87a' ||
-            signature === 'GIF89a'
+            signature === "GIF87a" ||
+            signature === "GIF89a"
         );
 
     }
 
-    if (mimeType === 'image/webp') {
+    if (mimeType === "image/webp") {
 
         return (
             buffer.length >= 12 &&
-            buffer.subarray(0, 4).toString('ascii') === 'RIFF' &&
-            buffer.subarray(8, 12).toString('ascii') === 'WEBP'
+            buffer.subarray(0, 4).toString("ascii") === "RIFF" &&
+            buffer.subarray(8, 12).toString("ascii") === "WEBP"
         );
 
     }
@@ -372,306 +579,122 @@ function isValidImageBuffer(buffer, mimeType) {
 
 
 /* =========================================================
-   6. GENERAL HELPERS
-========================================================= */
-
-
-/*
-   Escape special regular-expression characters.
-*/
-
-function escapeRegex(value) {
-
-    return String(value).replace(
-        /[.*+?^${}()|[\]\\]/g,
-        '\\$&'
-    );
-
-}
-
-
-/*
-   Normalise arrays.
-
-   Supports:
-   - Existing arrays.
-   - JSON array strings.
-   - Comma-separated strings.
-   - Newline-separated strings.
-*/
-
-function normaliseArray(value) {
-
-    if (Array.isArray(value)) {
-
-        return value
-            .map(item => String(item).trim())
-            .filter(Boolean);
-
-    }
-
-    if (typeof value !== 'string' || !value.trim()) {
-
-        return [];
-
-    }
-
-    const trimmed = value.trim();
-
-    try {
-
-        const parsed = JSON.parse(trimmed);
-
-        if (Array.isArray(parsed)) {
-
-            return normaliseArray(parsed);
-
-        }
-
-    } catch (error) {
-
-        // Continue with ordinary text handling.
-
-    }
-
-    return trimmed
-        .split(/[\n,]+/)
-        .map(item => item.trim())
-        .filter(Boolean);
-
-}
-
-
-/*
-   Normalise specifications.
-*/
-
-function normaliseSpecifications(value) {
-
-    if (Array.isArray(value)) {
-
-        return value
-
-            .map(item => {
-
-                if (
-                    item &&
-                    typeof item === 'object' &&
-                    !Array.isArray(item)
-                ) {
-
-                    return {
-
-                        name: String(
-                            item.name ||
-                            item.label ||
-                            ''
-                        ).trim(),
-
-                        value: String(
-                            item.value || ''
-                        ).trim()
-
-                    };
-
-                }
-
-                return {
-
-                    name: '',
-
-                    value: String(item).trim()
-
-                };
-
-            })
-
-            .filter(item =>
-                item.name || item.value
-            );
-
-    }
-
-    if (typeof value !== 'string' || !value.trim()) {
-
-        return [];
-
-    }
-
-    try {
-
-        const parsed = JSON.parse(value);
-
-        if (Array.isArray(parsed)) {
-
-            return normaliseSpecifications(parsed);
-
-        }
-
-    } catch (error) {
-
-        // Treat as ordinary text.
-
-    }
-
-    return value
-
-        .split('\n')
-
-        .map(line => line.trim())
-
-        .filter(Boolean)
-
-        .map(line => {
-
-            const separatorIndex = line.indexOf(':');
-
-            if (separatorIndex === -1) {
-
-                return {
-
-                    name: '',
-
-                    value: line
-
-                };
-
-            }
-
-            return {
-
-                name: line
-                    .slice(0, separatorIndex)
-                    .trim(),
-
-                value: line
-                    .slice(separatorIndex + 1)
-                    .trim()
-
-            };
-
-        })
-
-        .filter(item =>
-            item.name || item.value
-        );
-
-}
-
-
-/*
-   Normalise boolean values.
-*/
-
-function normaliseBoolean(value) {
-
-    if (typeof value === 'boolean') {
-
-        return value;
-
-    }
-
-    if (typeof value === 'string') {
-
-        const normalised =
-            value.trim().toLowerCase();
-
-        if (
-            ['true', '1', 'yes'].includes(normalised)
-        ) {
-
-            return true;
-
-        }
-
-        if (
-            ['false', '0', 'no'].includes(normalised)
-        ) {
-
-            return false;
-
-        }
-
-    }
-
-    if (typeof value === 'number') {
-
-        if (value === 1) return true;
-
-        if (value === 0) return false;
-
-    }
-
-    return null;
-
-}
-
-
-/*
-   Check whether a value is an actual product category.
-*/
-
-function isValidProductCategory(category) {
-
-    return (
-
-        typeof category === 'string' &&
-
-        PRODUCT_CATEGORIES.includes(category)
-
-    );
-
-}
-
-
-/*
-   Check whether a value is one of the eight homepage
-   product placements.
-*/
-
-function isValidHomepagePlacement(placement) {
-
-    return (
-
-        typeof placement === 'string' &&
-
-        HOMEPAGE_PRODUCT_PLACEMENTS.includes(placement)
-
-    );
-
-}
-
-
-/*
-   Check whether a value is one of the five additional
-   Shop collections.
-*/
-
-function isValidShopCollection(collection) {
-
-    return (
-
-        typeof collection === 'string' &&
-
-        ADDITIONAL_SHOP_COLLECTIONS.includes(collection)
-
-    );
-
-}
-
-
-/* =========================================================
    7. PRODUCT ASSIGNMENT HELPERS
 ========================================================= */
 
+function getExistingHomepagePlacements(product) {
+
+    if (!product) {
+
+        return [];
+
+    }
+
+    const placements = [];
+
+    if (Array.isArray(product.placements)) {
+
+        product.placements.forEach(value => {
+
+            if (isValidHomepagePlacement(value)) {
+
+                placements.push(value);
+
+            }
+
+        });
+
+    }
+
+    if (
+        product.placement &&
+        isValidHomepagePlacement(product.placement)
+    ) {
+
+        placements.push(product.placement);
+
+    }
+
+    /*
+       Legacy category fallback.
+    */
+
+    if (
+        placements.length === 0 &&
+        product.showOnHomepage === true &&
+        isValidHomepagePlacement(product.category)
+    ) {
+
+        placements.push(product.category);
+
+    }
+
+    return unique(placements);
+
+}
+
+
+function getProductCollections(product) {
+
+    if (!product) {
+
+        return [];
+
+    }
+
+    const collections = [];
+
+    if (Array.isArray(product.collections)) {
+
+        product.collections.forEach(value => {
+
+            if (isValidShopCollection(value)) {
+
+                collections.push(value);
+
+            }
+
+        });
+
+    }
+
+    /*
+       Legacy collection assignments.
+    */
+
+    if (Array.isArray(product.placements)) {
+
+        product.placements.forEach(value => {
+
+            if (isValidShopCollection(value)) {
+
+                collections.push(value);
+
+            }
+
+        });
+
+    }
+
+    if (
+        product.placement &&
+        isValidShopCollection(product.placement)
+    ) {
+
+        collections.push(product.placement);
+
+    }
+
+    return unique(collections);
+
+}
+
 
 /*
-   Separate submitted placement and collection values.
+   Read assignments from submitted form data.
 
-   Supports old admin submissions that placed collection
-   names inside the placements field.
-
-   New records will store these assignments separately.
+   Legacy collection values inside placements are
+   recognised and separated.
 */
 
 function getSubmittedAssignments({
@@ -688,23 +711,12 @@ function getSubmittedAssignments({
 
 }) {
 
-    let submittedPlacements = [];
+    const submittedPlacements = [];
 
-    let submittedCollections = [];
-
-
-    /*
-       Read the new placements field.
-    */
+    const submittedCollections = [];
 
     const rawPlacements =
         normaliseArray(placements);
-
-
-    /*
-       Separate homepage placements from legacy collection
-       values.
-    */
 
     rawPlacements.forEach(value => {
 
@@ -720,62 +732,34 @@ function getSubmittedAssignments({
 
     });
 
-
-    /*
-       Read the new collections field.
-    */
-
     submittedCollections.push(
         ...normaliseArray(collections)
     );
 
-
-    /*
-       Read the legacy singular placement field.
-    */
-
     if (placement) {
 
         const legacyPlacement =
-            String(placement).trim().toLowerCase();
+            String(placement)
+                .trim()
+                .toLowerCase();
 
-        if (
-            isValidHomepagePlacement(legacyPlacement)
-        ) {
+        if (isValidHomepagePlacement(legacyPlacement)) {
 
-            if (submittedPlacements.length === 0) {
+            submittedPlacements.push(legacyPlacement);
 
-                submittedPlacements.push(
-                    legacyPlacement
-                );
+        } else if (isValidShopCollection(legacyPlacement)) {
 
-            }
-
-        } else if (
-            isValidShopCollection(legacyPlacement)
-        ) {
-
-            submittedCollections.push(
-                legacyPlacement
-            );
+            submittedCollections.push(legacyPlacement);
 
         }
 
     }
-
-
-    /*
-       Support older homepage submissions that used
-       category as their homepage placement.
-    */
 
     if (
 
         submittedPlacements.length === 0 &&
 
         allowLegacyCategoryFallback &&
-
-        category &&
 
         isValidHomepagePlacement(category)
 
@@ -785,15 +769,49 @@ function getSubmittedAssignments({
 
     }
 
+    return {
+
+        placements: unique(submittedPlacements),
+
+        collections: unique(submittedCollections)
+
+    };
+
+}
+
+
+/* =========================================================
+   8. PRODUCT VISIBILITY FILTERS
+========================================================= */
+
+function shopProductsFilter() {
 
     return {
 
-        placements: [
-            ...new Set(submittedPlacements)
-        ],
+        $or: [
 
-        collections: [
-            ...new Set(submittedCollections)
+            {
+                showInShop: true
+            },
+
+            {
+                showInShop: {
+                    $exists: false
+                },
+
+                targetPage: "shop"
+            },
+
+            {
+                showInShop: {
+                    $exists: false
+                },
+
+                targetPage: {
+                    $exists: false
+                }
+            }
+
         ]
 
     };
@@ -801,66 +819,145 @@ function getSubmittedAssignments({
 }
 
 
-/*
-   Read collection assignments from existing products.
+function homepagePlacementFilter(placement) {
 
-   Old records may contain Shop collection values in:
-   - placements
-   - placement
+    return {
 
-   These are recognised without immediately modifying
-   the stored database record.
-*/
+        $or: [
 
-function getProductCollections(product) {
+            {
+                showOnHomepage: true,
+                placements: placement
+            },
 
-    const collections = [
+            {
+                showOnHomepage: true,
+                placement: placement
+            },
 
-        ...(product.collections || [])
+            {
+                showOnHomepage: true,
 
-    ];
+                placement: {
+                    $in: [null, "", "regular"]
+                },
+
+                category: placement
+            },
+
+            {
+                targetPage: "homepage",
+
+                showOnHomepage: {
+                    $ne: false
+                },
+
+                placements: placement
+            },
+
+            {
+                targetPage: "homepage",
+
+                showOnHomepage: {
+                    $ne: false
+                },
+
+                placement: placement
+            },
+
+            {
+                targetPage: "homepage",
+
+                showOnHomepage: {
+                    $ne: false
+                },
+
+                placement: {
+                    $in: [null, "", "regular"]
+                },
+
+                category: placement
+            },
+
+            {
+                targetPage: {
+                    $exists: false
+                },
+
+                showOnHomepage: true,
+
+                placements: placement
+            },
+
+            {
+                targetPage: {
+                    $exists: false
+                },
+
+                showOnHomepage: true,
+
+                placement: placement
+            },
+
+            {
+                targetPage: {
+                    $exists: false
+                },
+
+                showOnHomepage: true,
+
+                placement: {
+                    $in: [null, "", "regular"]
+                },
+
+                category: placement
+            }
+
+        ]
+
+    };
+
+}
 
 
-    if (Array.isArray(product.placements)) {
+function shopCollectionFilter(collection) {
 
-        product.placements.forEach(value => {
+    return {
 
-            if (isValidShopCollection(value)) {
+        $and: [
 
-                collections.push(value);
+            shopProductsFilter(),
+
+            {
+
+                $or: [
+
+                    {
+                        collections: collection
+                    },
+
+                    {
+                        placements: collection
+                    },
+
+                    {
+                        placement: collection
+                    }
+
+                ]
 
             }
 
-        });
+        ]
 
-    }
-
-
-    if (
-        product.placement &&
-        isValidShopCollection(product.placement)
-    ) {
-
-        collections.push(product.placement);
-
-    }
-
-
-    return [
-        ...new Set(collections)
-    ];
+    };
 
 }
 
 
 /* =========================================================
-   8. GRIDFS IMAGE OPERATIONS
+   9. GRIDFS IMAGE OPERATIONS
 ========================================================= */
-
-
-/*
-   Upload a validated image buffer to GridFS.
-*/
 
 async function uploadImageToGridFS(file, metadata = {}) {
 
@@ -880,22 +977,23 @@ async function uploadImageToGridFS(file, metadata = {}) {
     const bucket = getProductImageBucket();
 
     const extension =
-        path.extname(file.originalname || '').toLowerCase();
+        path.extname(file.originalname || "").toLowerCase();
 
     const safeExtension = [
-        '.jpg',
-        '.jpeg',
-        '.png',
-        '.webp',
-        '.gif'
+
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".webp",
+        ".gif"
+
     ].includes(extension)
         ? extension
-        : '.jpg';
+        : ".jpg";
 
     const filename =
-        `product-${Date.now()}-${mongoose.Types.ObjectId()}` +
+        `product-${Date.now()}-${new mongoose.Types.ObjectId()}` +
         safeExtension;
-
 
     return new Promise((resolve, reject) => {
 
@@ -913,11 +1011,9 @@ async function uploadImageToGridFS(file, metadata = {}) {
 
         );
 
+        uploadStream.on("error", reject);
 
-        uploadStream.on('error', reject);
-
-
-        uploadStream.on('finish', () => {
+        uploadStream.on("finish", () => {
 
             resolve({
 
@@ -931,7 +1027,6 @@ async function uploadImageToGridFS(file, metadata = {}) {
 
         });
 
-
         uploadStream.end(file.buffer);
 
     });
@@ -939,20 +1034,11 @@ async function uploadImageToGridFS(file, metadata = {}) {
 }
 
 
-/*
-   Delete a GridFS image safely.
-
-   Missing files are ignored so legacy products without
-   GridFS images can still be deleted.
-*/
-
 async function deleteGridFSImage(fileId) {
 
     if (
         !fileId ||
-        !mongoose.Types.ObjectId.isValid(
-            String(fileId)
-        )
+        !mongoose.Types.ObjectId.isValid(String(fileId))
     ) {
 
         return;
@@ -973,10 +1059,17 @@ async function deleteGridFSImage(fileId) {
 
     } catch (error) {
 
-        if (error.code !== 'ENOENT') {
+        /*
+           Ignore missing GridFS files.
+        */
+
+        if (
+            error.code !== "ENOENT" &&
+            error.code !== 26
+        ) {
 
             console.error(
-                'GridFS image deletion warning:',
+                "GridFS image deletion warning:",
                 error.message
             );
 
@@ -987,14 +1080,9 @@ async function deleteGridFSImage(fileId) {
 }
 
 
-/*
-   Delete all GridFS images belonging to a product.
-*/
-
 async function deleteProductImages(product) {
 
     const imageIds = [];
-
 
     if (product.imageFileId) {
 
@@ -1002,16 +1090,11 @@ async function deleteProductImages(product) {
 
     }
 
-
     if (Array.isArray(product.extraImages)) {
 
         product.extraImages.forEach(image => {
 
-            if (
-                image &&
-                typeof image === 'object' &&
-                image.fileId
-            ) {
+            if (image && image.fileId) {
 
                 imageIds.push(image.fileId);
 
@@ -1021,13 +1104,7 @@ async function deleteProductImages(product) {
 
     }
 
-
-    const uniqueIds = [
-        ...new Set(imageIds.map(String))
-    ];
-
-
-    for (const fileId of uniqueIds) {
+    for (const fileId of unique(imageIds.map(String))) {
 
         await deleteGridFSImage(fileId);
 
@@ -1035,11 +1112,6 @@ async function deleteProductImages(product) {
 
 }
 
-
-/*
-   Delete uploaded files if product creation or editing
-   fails after the files have been stored.
-*/
 
 async function cleanupUploadedImages(images) {
 
@@ -1057,16 +1129,8 @@ async function cleanupUploadedImages(images) {
 
 
 /* =========================================================
-   9. IMAGE NORMALISATION HELPERS
+   10. IMAGE DATA HELPERS
 ========================================================= */
-
-
-/*
-   Convert uploaded GridFS images into product image data.
-
-   First image = main image.
-   Remaining images = additional images.
-*/
 
 function buildUploadedImageData(req, uploadedImages) {
 
@@ -1098,7 +1162,7 @@ function buildUploadedImageData(req, uploadedImages) {
 
                 fileId: item.fileId,
 
-                publicId: ''
+                publicId: ""
 
             }))
 
@@ -1107,21 +1171,11 @@ function buildUploadedImageData(req, uploadedImages) {
 }
 
 
-/*
-   Normalise additional image objects submitted by the
-   admin portal.
-
-   Supports:
-   - Current object format.
-   - Legacy string URL format.
-*/
-
 function normaliseExtraImages(value) {
 
     let parsed = value;
 
-
-    if (typeof parsed === 'string') {
+    if (typeof parsed === "string") {
 
         try {
 
@@ -1135,56 +1189,52 @@ function normaliseExtraImages(value) {
 
     }
 
-
     if (!Array.isArray(parsed)) {
 
         return [];
 
     }
 
-
     return parsed
 
         .map(image => {
 
-            if (typeof image === 'string') {
+            if (typeof image === "string") {
 
                 return {
 
                     url: image.trim(),
 
-                    fileId: '',
+                    fileId: "",
 
-                    publicId: ''
+                    publicId: ""
 
                 };
 
             }
 
-
             if (
                 image &&
-                typeof image === 'object'
+                typeof image === "object"
             ) {
 
                 return {
 
                     url: String(
-                        image.url || ''
+                        image.url || ""
                     ).trim(),
 
                     fileId: String(
-                        image.fileId || ''
+                        image.fileId || ""
                     ).trim(),
 
                     publicId: String(
-                        image.publicId || ''
+                        image.publicId || ""
                     ).trim()
 
                 };
 
             }
-
 
             return null;
 
@@ -1198,272 +1248,761 @@ function normaliseExtraImages(value) {
 
 
 /* =========================================================
-   10. VISIBILITY FILTERS
+   11. PRODUCT VALIDATION
 ========================================================= */
 
+function validateProductData(
+    body,
+    isUpdate = false,
+    existingProduct = null
+) {
 
-/*
-   Shop visibility filter.
+    const result = {};
 
-   Supports current and legacy records.
+    const {
 
-   Explicit showInShop:false always hides the product.
-*/
+        title,
 
-function shopProductsFilter() {
+        category,
 
-    return {
+        price,
 
-        $or: [
+        originalPrice,
 
-            {
+        placements,
 
-                showInShop: true
+        placement,
 
-            },
+        collections,
 
+        showInShop,
 
-            {
+        showOnHomepage,
 
-                showInShop: {
-                    $exists: false
-                },
+        targetPage,
 
-                targetPage: 'shop'
+        stockStatus
 
-            },
+    } = body;
 
 
-            {
+    /* -----------------------------------------------------
+       A. TITLE
+    ----------------------------------------------------- */
 
-                showInShop: {
-                    $exists: false
-                },
+    if (!isUpdate || title !== undefined) {
 
-                targetPage: {
-                    $exists: false
-                }
+        result.title = String(
+            title || ""
+        ).trim();
+
+        if (!result.title) {
+
+            throw new Error(
+                "Product title is required."
+            );
+
+        }
+
+    }
+
+
+    /* -----------------------------------------------------
+       B. CATEGORY
+    ----------------------------------------------------- */
+
+    if (!isUpdate || category !== undefined) {
+
+        result.category = String(
+            category || ""
+        )
+            .trim()
+            .toLowerCase();
+
+        if (!isValidProductCategory(result.category)) {
+
+            throw new Error(
+                "Invalid product category."
+            );
+
+        }
+
+    }
+
+
+    /* -----------------------------------------------------
+       C. SELLING PRICE
+    ----------------------------------------------------- */
+
+    if (!isUpdate || price !== undefined) {
+
+        const finalPrice = Number(price);
+
+        if (
+
+            price === undefined ||
+            price === null ||
+            price === "" ||
+
+            !Number.isFinite(finalPrice) ||
+
+            finalPrice <= 0
+
+        ) {
+
+            throw new Error(
+                "A valid selling price greater than zero is required."
+            );
+
+        }
+
+        result.price = finalPrice;
+
+    }
+
+
+    /* -----------------------------------------------------
+       D. ORIGINAL PRICE
+    ----------------------------------------------------- */
+
+    if (!isUpdate || originalPrice !== undefined) {
+
+        if (
+
+            originalPrice === undefined ||
+            originalPrice === null ||
+            originalPrice === ""
+
+        ) {
+
+            result.originalPrice = null;
+
+        } else {
+
+            const finalOriginalPrice =
+                Number(originalPrice);
+
+            if (
+
+                !Number.isFinite(finalOriginalPrice) ||
+
+                finalOriginalPrice <= 0
+
+            ) {
+
+                throw new Error(
+                    "Original price must be a valid positive number."
+                );
 
             }
 
-        ]
+            result.originalPrice = finalOriginalPrice;
 
-    };
+        }
 
-}
+    }
 
 
-/*
-   Homepage placement filter.
+    const effectivePrice =
+        result.price !== undefined
+            ? result.price
+            : existingProduct?.price;
 
-   Only the eight approved homepage placements are used.
+    const effectiveOriginalPrice =
+        result.originalPrice !== undefined
+            ? result.originalPrice
+            : existingProduct?.originalPrice;
 
-   Legacy singular placement and category assignments
-   remain supported.
-*/
+    if (
 
-function homepagePlacementFilter(placement) {
+        effectivePrice !== undefined &&
 
-    return {
+        effectiveOriginalPrice !== null &&
 
-        $or: [
+        effectiveOriginalPrice !== undefined &&
 
-            // Current placement array.
-            {
+        effectivePrice > effectiveOriginalPrice
 
-                showOnHomepage: true,
+    ) {
 
-                placements: placement
+        throw new Error(
+            "Original price cannot be lower than the selling price."
+        );
 
-            },
+    }
 
 
-            // Legacy singular placement.
-            {
+    /* -----------------------------------------------------
+       E. ASSIGNMENTS
 
-                showOnHomepage: true,
+       IMPORTANT:
+       Updating homepage placements does not erase
+       existing Shop collections.
 
-                placement: placement
+       Updating Shop collections does not erase
+       existing homepage placements.
+    ----------------------------------------------------- */
 
-            },
+    const rawPlacements =
+        normaliseArray(placements);
 
+    const hasLegacyHomepagePlacement =
+        placement &&
+        (
+            isValidHomepagePlacement(
+                String(placement).trim().toLowerCase()
+            ) ||
+            String(placement).trim().toLowerCase() === "regular"
+        );
 
-            // Legacy category used as homepage placement.
-            {
+    const hasLegacyCollectionPlacement =
+        placement &&
+        isValidShopCollection(
+            String(placement).trim().toLowerCase()
+        );
 
-                showOnHomepage: true,
+    const hasCollectionInPlacements =
+        rawPlacements.some(
+            isValidShopCollection
+        );
 
-                placement: {
-                    $in: [null, '', 'regular']
-                },
+    const homepageAssignmentsSubmitted = (
 
-                category: placement
+        !isUpdate ||
 
-            },
+        placements !== undefined ||
 
+        hasLegacyHomepagePlacement
 
-            // Older homepage records.
-            {
+    );
 
-                targetPage: 'homepage',
+    const collectionAssignmentsSubmitted = (
 
-                showOnHomepage: {
-                    $ne: false
-                },
+        !isUpdate ||
 
-                placements: placement
+        collections !== undefined ||
 
-            },
+        hasCollectionInPlacements ||
 
+        hasLegacyCollectionPlacement
 
-            {
+    );
 
-                targetPage: 'homepage',
+    const assignmentsTouched = (
 
-                showOnHomepage: {
-                    $ne: false
-                },
+        homepageAssignmentsSubmitted ||
 
-                placement: placement
+        collectionAssignmentsSubmitted
 
-            },
+    );
 
+    if (assignmentsTouched) {
 
-            {
+        const submitted = getSubmittedAssignments({
 
-                targetPage: 'homepage',
+            placements,
 
-                showOnHomepage: {
-                    $ne: false
-                },
+            placement,
 
-                placement: {
-                    $in: [null, '', 'regular']
-                },
+            collections,
 
-                category: placement
+            category:
+                result.category ||
+                category,
 
-            },
+            allowLegacyCategoryFallback:
+                !isUpdate &&
+                placements === undefined &&
+                placement === undefined &&
+                collections === undefined &&
+                targetPage === "homepage"
 
+        });
 
-            // Very old records without targetPage.
-            {
+        const existingPlacements =
+            getExistingHomepagePlacements(existingProduct);
 
-                targetPage: {
-                    $exists: false
-                },
+        const existingCollections =
+            getProductCollections(existingProduct);
 
-                showOnHomepage: true,
 
-                placements: placement
+        result.placements =
+            homepageAssignmentsSubmitted
 
-            },
+                ? submitted.placements
 
+                : existingPlacements;
 
-            {
 
-                targetPage: {
-                    $exists: false
-                },
+        result.collections =
+            collectionAssignmentsSubmitted
 
-                showOnHomepage: true,
+                ? submitted.collections
 
-                placement: placement
+                : existingCollections;
 
-            }
 
-        ]
+        result.placements = unique(
+            result.placements
+        );
 
-    };
+        result.collections = unique(
+            result.collections
+        );
 
-}
 
+        /*
+           Store only a homepage placement in the legacy
+           singular placement field.
+        */
 
-/*
-   Additional Shop collection filter.
+        result.placement =
+            result.placements[0] || "regular";
 
-   Recognises both the new collections field and legacy
-   collection assignments.
-*/
+    }
 
-function shopCollectionFilter(collection) {
 
-    return {
+    /* -----------------------------------------------------
+       F. TARGET PAGE
+    ----------------------------------------------------- */
 
-        $and: [
+    if (!isUpdate || targetPage !== undefined) {
 
-            shopProductsFilter(),
+        const finalTargetPage = String(
 
-            {
+            targetPage || "shop"
 
-                $or: [
+        )
+            .trim()
+            .toLowerCase();
 
-                    {
+        if (
+            !["homepage", "shop"].includes(finalTargetPage)
+        ) {
 
-                        collections: collection
+            throw new Error(
+                "Invalid product destination."
+            );
 
-                    },
+        }
 
+        result.targetPage = finalTargetPage;
 
-                    // Legacy collection in placements.
-                    {
+    }
 
-                        placements: collection
 
-                    },
+    /* -----------------------------------------------------
+       G. SHOP VISIBILITY
+    ----------------------------------------------------- */
 
+    if (!isUpdate || showInShop !== undefined) {
 
-                    // Legacy collection in singular placement.
-                    {
+        const explicitValue =
+            normaliseBoolean(showInShop);
 
-                        placement: collection
+        if (
+            showInShop !== undefined &&
+            explicitValue === null
+        ) {
 
-                    }
+            throw new Error(
+                "Invalid Shop visibility value."
+            );
 
-                ]
+        }
 
-            }
+        result.showInShop =
+            explicitValue !== null
 
-        ]
+                ? explicitValue
 
-    };
+                : (
+
+                    result.targetPage === "shop" ||
+
+                    (result.placements || []).length > 0 ||
+
+                    (result.collections || []).length > 0
+
+                );
+
+    } else if (
+
+        assignmentsTouched &&
+
+        (
+            (result.placements || []).length > 0 ||
+            (result.collections || []).length > 0
+        )
+
+    ) {
+
+        /*
+           Assigning a product to a Shop collection or
+           homepage placement makes it Shop-visible.
+        */
+
+        result.showInShop = true;
+
+    }
+
+
+    /* -----------------------------------------------------
+       H. HOMEPAGE VISIBILITY
+    ----------------------------------------------------- */
+
+    if (!isUpdate || showOnHomepage !== undefined) {
+
+        const explicitValue =
+            normaliseBoolean(showOnHomepage);
+
+        if (
+            showOnHomepage !== undefined &&
+            explicitValue === null
+        ) {
+
+            throw new Error(
+                "Invalid homepage visibility value."
+            );
+
+        }
+
+        result.showOnHomepage =
+            explicitValue !== null
+
+                ? explicitValue
+
+                : (
+                    (result.placements || []).length > 0
+                );
+
+    } else if (homepageAssignmentsSubmitted) {
+
+        result.showOnHomepage =
+            (result.placements || []).length > 0;
+
+    }
+
+
+    /* -----------------------------------------------------
+       I. LEGACY inStock SUPPORT
+    ----------------------------------------------------- */
+
+    let finalStockStatus = stockStatus;
+
+    if (
+        finalStockStatus === undefined &&
+        body.inStock !== undefined
+    ) {
+
+        const legacyStock =
+            normaliseBoolean(body.inStock);
+
+        if (legacyStock === null) {
+
+            throw new Error(
+                "Invalid stock status."
+            );
+
+        }
+
+        finalStockStatus =
+            legacyStock
+                ? "in-stock"
+                : "out-of-stock";
+
+    }
+
+
+    if (
+        !isUpdate ||
+        finalStockStatus !== undefined
+    ) {
+
+        const finalValue = String(
+
+            finalStockStatus || "in-stock"
+
+        )
+            .trim()
+            .toLowerCase();
+
+        if (
+            !["in-stock", "out-of-stock"].includes(finalValue)
+        ) {
+
+            throw new Error(
+                "Invalid stock status."
+            );
+
+        }
+
+        result.stockStatus = finalValue;
+
+    }
+
+
+    /* -----------------------------------------------------
+       J. OPTIONAL TEXT FIELDS
+    ----------------------------------------------------- */
+
+    const textFields = [
+
+        "description",
+        "brand",
+        "model",
+        "warranty",
+        "demoBatch"
+
+    ];
+
+    textFields.forEach(field => {
+
+        if (
+            !isUpdate ||
+            body[field] !== undefined
+        ) {
+
+            result[field] = String(
+                body[field] || ""
+            ).trim();
+
+        }
+
+    });
+
+
+    /* -----------------------------------------------------
+       K. ARRAY FIELDS
+    ----------------------------------------------------- */
+
+    const arrayFields = [
+
+        "colors",
+        "features"
+
+    ];
+
+    arrayFields.forEach(field => {
+
+        if (
+            !isUpdate ||
+            body[field] !== undefined
+        ) {
+
+            result[field] =
+                normaliseArray(body[field]);
+
+        }
+
+    });
+
+
+    /* -----------------------------------------------------
+       L. SPECIFICATIONS
+    ----------------------------------------------------- */
+
+    if (
+        !isUpdate ||
+        body.specifications !== undefined
+    ) {
+
+        result.specifications =
+            normaliseSpecifications(
+                body.specifications
+            );
+
+    }
+
+
+    /* -----------------------------------------------------
+       M. BOOLEAN DETAILS
+    ----------------------------------------------------- */
+
+    if (
+        !isUpdate ||
+        body.detailsVerified !== undefined
+    ) {
+
+        result.detailsVerified =
+            normaliseBoolean(
+                body.detailsVerified
+            ) === true;
+
+    }
+
+
+    if (
+        !isUpdate ||
+        body.isDemo !== undefined
+    ) {
+
+        result.isDemo =
+            normaliseBoolean(
+                body.isDemo
+            ) === true;
+
+    }
+
+
+    /* -----------------------------------------------------
+       N. ASSIGNMENT AND VISIBILITY VALIDATION
+    ----------------------------------------------------- */
+
+    const finalPlacements =
+        result.placements !== undefined
+            ? result.placements
+            : getExistingHomepagePlacements(existingProduct);
+
+    const finalCollections =
+        result.collections !== undefined
+            ? result.collections
+            : getProductCollections(existingProduct);
+
+    const finalShowInShop =
+        result.showInShop !== undefined
+            ? result.showInShop
+            : existingProduct
+                ? existingProduct.showInShop !== false
+                : true;
+
+    const finalShowOnHomepage =
+        result.showOnHomepage !== undefined
+            ? result.showOnHomepage
+            : existingProduct
+                ? existingProduct.showOnHomepage === true
+                : false;
+
+
+    if (
+        finalCollections.length > 0 &&
+        !finalShowInShop
+    ) {
+
+        throw new Error(
+            "Products assigned to Shop collections must be visible in Shop."
+        );
+
+    }
+
+
+    if (
+        finalPlacements.length > 0 &&
+        !finalShowInShop
+    ) {
+
+        throw new Error(
+            "Products assigned to homepage placements must also be visible in Shop."
+        );
+
+    }
+
+
+    if (
+        finalShowOnHomepage &&
+        finalPlacements.length === 0
+    ) {
+
+        throw new Error(
+            "Select at least one homepage product placement."
+        );
+
+    }
+
+
+    if (
+        !finalShowInShop &&
+        !finalShowOnHomepage
+    ) {
+
+        throw new Error(
+            "The product must be visible in Shop or on the homepage."
+        );
+
+    }
+
+
+    return result;
 
 }
 
 
 /* =========================================================
-   11. GET ALL SHOP PRODUCTS
+   12. HOMEPAGE PRODUCT LIMIT
 ========================================================= */
 
-router.get('/', async (req, res) => {
+async function validateHomepageLimits(
+    placements,
+    excludeProductId = null
+) {
+
+    for (const placement of placements) {
+
+        const filter =
+            homepagePlacementFilter(placement);
+
+        if (excludeProductId) {
+
+            filter._id = {
+
+                $ne: excludeProductId
+
+            };
+
+        }
+
+        const existingCount =
+            await Product.countDocuments(filter);
+
+        if (
+            existingCount >= MAX_HOMEPAGE_PRODUCTS
+        ) {
+
+            const label =
+                CATEGORY_LABELS[placement] ||
+                placement;
+
+            throw new Error(
+
+                `${label} already contains the maximum of ` +
+                `${MAX_HOMEPAGE_PRODUCTS} products.`
+
+            );
+
+        }
+
+    }
+
+}
+
+
+/* =========================================================
+   13. GET ALL SHOP PRODUCTS
+========================================================= */
+
+router.get("/", async (req, res) => {
 
     try {
 
         const products = await Product.find(
             shopProductsFilter()
         )
-
             .sort({
-
                 createdAt: -1
-
             });
 
-
         return res.status(200).json(products);
-
 
     } catch (error) {
 
         console.error(
-            'Error loading Shop products:',
+            "Error loading Shop products:",
             error
         );
 
-
         return res.status(500).json({
 
-            message: 'Failed to load products.'
+            message: "Failed to load products."
 
         });
 
@@ -1473,27 +2012,24 @@ router.get('/', async (req, res) => {
 
 
 /* =========================================================
-   12. GET HOMEPAGE PRODUCTS BY PLACEMENT
+   14. GET HOMEPAGE PRODUCTS
 ========================================================= */
 
-router.get('/homepage/:category', async (req, res) => {
+router.get("/homepage/:category", async (req, res) => {
 
     try {
 
         const category = String(
-
-            req.params.category || ''
-
+            req.params.category || ""
         )
             .trim()
             .toLowerCase();
-
 
         if (!isValidHomepagePlacement(category)) {
 
             return res.status(400).json({
 
-                message: 'Invalid homepage placement.',
+                message: "Invalid homepage placement.",
 
                 allowedPlacements:
                     HOMEPAGE_PRODUCT_PLACEMENTS
@@ -1502,36 +2038,28 @@ router.get('/homepage/:category', async (req, res) => {
 
         }
 
-
         const products = await Product.find(
 
             homepagePlacementFilter(category)
 
         )
-
             .sort({
-
                 createdAt: -1
-
             })
-
             .limit(MAX_HOMEPAGE_PRODUCTS);
 
-
         return res.status(200).json(products);
-
 
     } catch (error) {
 
         console.error(
-            'Error loading homepage products:',
+            "Error loading homepage products:",
             error
         );
 
-
         return res.status(500).json({
 
-            message: 'Failed to load homepage products.'
+            message: "Failed to load homepage products."
 
         });
 
@@ -1541,34 +2069,31 @@ router.get('/homepage/:category', async (req, res) => {
 
 
 /* =========================================================
-   13. GET PRODUCTS BY ACTUAL CATEGORY
+   15. GET PRODUCTS BY ACTUAL CATEGORY
 ========================================================= */
 
-router.get('/category/:category', async (req, res) => {
+router.get("/category/:category", async (req, res) => {
 
     try {
 
         const category = String(
-
-            req.params.category || ''
-
+            req.params.category || ""
         )
             .trim()
             .toLowerCase();
-
 
         if (!isValidProductCategory(category)) {
 
             return res.status(400).json({
 
-                message: 'Invalid product category.',
+                message: "Invalid product category.",
 
-                allowedCategories: PRODUCT_CATEGORIES
+                allowedCategories:
+                    PRODUCT_CATEGORIES
 
             });
 
         }
-
 
         const products = await Product.find({
 
@@ -1577,36 +2102,28 @@ router.get('/category/:category', async (req, res) => {
                 shopProductsFilter(),
 
                 {
-
                     category
-
                 }
 
             ]
 
         })
-
             .sort({
-
                 createdAt: -1
-
             });
 
-
         return res.status(200).json(products);
-
 
     } catch (error) {
 
         console.error(
-            'Error loading category products:',
+            "Error loading category products:",
             error
         );
 
-
         return res.status(500).json({
 
-            message: 'Failed to load category products.'
+            message: "Failed to load category products."
 
         });
 
@@ -1616,27 +2133,24 @@ router.get('/category/:category', async (req, res) => {
 
 
 /* =========================================================
-   14. GET PRODUCTS BY ADDITIONAL SHOP COLLECTION
+   16. GET PRODUCTS BY SHOP COLLECTION
 ========================================================= */
 
-router.get('/collection/:collection', async (req, res) => {
+router.get("/collection/:collection", async (req, res) => {
 
     try {
 
         const collection = String(
-
-            req.params.collection || ''
-
+            req.params.collection || ""
         )
             .trim()
             .toLowerCase();
-
 
         if (!isValidShopCollection(collection)) {
 
             return res.status(400).json({
 
-                message: 'Invalid Shop collection.',
+                message: "Invalid Shop collection.",
 
                 allowedCollections:
                     ADDITIONAL_SHOP_COLLECTIONS
@@ -1645,34 +2159,27 @@ router.get('/collection/:collection', async (req, res) => {
 
         }
 
-
         const products = await Product.find(
 
             shopCollectionFilter(collection)
 
         )
-
             .sort({
-
                 createdAt: -1
-
             });
 
-
         return res.status(200).json(products);
-
 
     } catch (error) {
 
         console.error(
-            'Error loading Shop collection:',
+            "Error loading Shop collection:",
             error
         );
 
-
         return res.status(500).json({
 
-            message: 'Failed to load Shop collection.'
+            message: "Failed to load Shop collection."
 
         });
 
@@ -1682,19 +2189,16 @@ router.get('/collection/:collection', async (req, res) => {
 
 
 /* =========================================================
-   15. SEARCH PRODUCTS
+   17. SEARCH PRODUCTS
 ========================================================= */
 
-router.get('/search', async (req, res) => {
+router.get("/search", async (req, res) => {
 
     try {
 
         const searchTerm = String(
-
-            req.query.q || ''
-
+            req.query.q || ""
         ).trim();
-
 
         if (!searchTerm) {
 
@@ -1702,15 +2206,10 @@ router.get('/search', async (req, res) => {
 
         }
 
-
         const searchRegex = new RegExp(
-
             escapeRegex(searchTerm),
-
-            'i'
-
+            "i"
         );
-
 
         const products = await Product.find({
 
@@ -1769,28 +2268,22 @@ router.get('/search', async (req, res) => {
             ]
 
         })
-
             .sort({
-
                 createdAt: -1
-
             });
 
-
         return res.status(200).json(products);
-
 
     } catch (error) {
 
         console.error(
-            'Error searching products:',
+            "Error searching products:",
             error
         );
 
-
         return res.status(500).json({
 
-            message: 'Product search failed.'
+            message: "Product search failed."
 
         });
 
@@ -1800,15 +2293,14 @@ router.get('/search', async (req, res) => {
 
 
 /* =========================================================
-   16. GET PRODUCT IMAGE FROM GRIDFS
+   18. GET PRODUCT IMAGE FROM GRIDFS
 ========================================================= */
 
-router.get('/image/:fileId', async (req, res) => {
+router.get("/image/:fileId", async (req, res) => {
 
     try {
 
         const { fileId } = req.params;
-
 
         if (
             !mongoose.Types.ObjectId.isValid(fileId)
@@ -1816,19 +2308,16 @@ router.get('/image/:fileId', async (req, res) => {
 
             return res.status(400).json({
 
-                message: 'Invalid image identifier.'
+                message: "Invalid image identifier."
 
             });
 
         }
 
-
         const bucket = getProductImageBucket();
-
 
         const objectId =
             new mongoose.Types.ObjectId(fileId);
-
 
         const files = await bucket.find({
 
@@ -1836,49 +2325,44 @@ router.get('/image/:fileId', async (req, res) => {
 
         }).toArray();
 
-
         if (!files.length) {
 
             return res.status(404).json({
 
-                message: 'Product image not found.'
+                message: "Product image not found."
 
             });
 
         }
 
-
         const file = files[0];
-
 
         res.set({
 
-            'Content-Type':
-                file.contentType || 'application/octet-stream',
+            "Content-Type":
+                file.contentType || "application/octet-stream",
 
-            'Cache-Control':
-                'public, max-age=31536000, immutable'
+            "Cache-Control":
+                "public, max-age=31536000, immutable"
 
         });
-
 
         const downloadStream =
             bucket.openDownloadStream(objectId);
 
-
-        downloadStream.on('error', error => {
+        downloadStream.on("error", error => {
 
             console.error(
-                'Product image streaming error:',
+                "Product image streaming error:",
                 error
             );
-
 
             if (!res.headersSent) {
 
                 res.status(500).json({
 
-                    message: 'Failed to retrieve product image.'
+                    message:
+                        "Failed to retrieve product image."
 
                 });
 
@@ -1890,23 +2374,21 @@ router.get('/image/:fileId', async (req, res) => {
 
         });
 
-
         downloadStream.pipe(res);
-
 
     } catch (error) {
 
         console.error(
-            'Product image retrieval error:',
+            "Product image retrieval error:",
             error
         );
-
 
         if (!res.headersSent) {
 
             return res.status(500).json({
 
-                message: 'Failed to retrieve product image.'
+                message:
+                    "Failed to retrieve product image."
 
             });
 
@@ -1918,94 +2400,88 @@ router.get('/image/:fileId', async (req, res) => {
 
 
 /* =========================================================
-   17. ADMIN - GET ALL PRODUCTS
+   19. ADMIN - GET ALL PRODUCTS
 ========================================================= */
 
-router.get('/admin/list', requireAdmin, async (req, res) => {
+router.get(
+    "/admin/list",
+    requireAdmin,
+    async (req, res) => {
 
-    try {
+        try {
 
-        const products = await Product.find({})
+            const products = await Product.find({})
+                .sort({
+                    createdAt: -1
+                });
 
-            .sort({
+            return res.status(200).json(products);
 
-                createdAt: -1
+        } catch (error) {
+
+            console.error(
+                "Admin product listing error:",
+                error
+            );
+
+            return res.status(500).json({
+
+                message:
+                    "Failed to load admin products."
 
             });
 
-
-        return res.status(200).json(products);
-
-
-    } catch (error) {
-
-        console.error(
-            'Admin product listing error:',
-            error
-        );
-
-
-        return res.status(500).json({
-
-            message: 'Failed to load admin products.'
-
-        });
+        }
 
     }
-
-});
+);
 
 
 /* =========================================================
-   18. GET A SINGLE PRODUCT
+   20. GET A SINGLE PRODUCT
 ========================================================= */
 
-router.get('/:id', async (req, res) => {
+router.get("/:id", async (req, res) => {
 
     try {
 
         const { id } = req.params;
 
-
         if (!mongoose.Types.ObjectId.isValid(id)) {
 
             return res.status(400).json({
 
-                message: 'Invalid product ID.'
+                message: "Invalid product ID."
 
             });
 
         }
 
-
-        const product = await Product.findById(id);
-
+        const product =
+            await Product.findById(id);
 
         if (!product) {
 
             return res.status(404).json({
 
-                message: 'Product not found.'
+                message: "Product not found."
 
             });
 
         }
 
-
         return res.status(200).json(product);
-
 
     } catch (error) {
 
         console.error(
-            'Error retrieving product:',
+            "Error retrieving product:",
             error
         );
 
-
         return res.status(500).json({
 
-            message: 'Failed to retrieve product.'
+            message: "Failed to retrieve product."
 
         });
 
@@ -2015,595 +2491,12 @@ router.get('/:id', async (req, res) => {
 
 
 /* =========================================================
-   19. VALIDATE PRODUCT DATA
-========================================================= */
-
-function validateProductData(body, isUpdate = false) {
-
-    const {
-
-        title,
-
-        category,
-
-        price,
-
-        originalPrice,
-
-        placements,
-
-        placement,
-
-        collections,
-
-        showInShop,
-
-        showOnHomepage,
-
-        targetPage,
-
-        stockStatus
-
-    } = body;
-
-
-    const result = {};
-
-
-    /* -----------------------------------------------------
-       A. PRODUCT TITLE
-    ----------------------------------------------------- */
-
-    if (!isUpdate || title !== undefined) {
-
-        result.title = String(
-            title || ''
-        ).trim();
-
-
-        if (!result.title) {
-
-            throw new Error(
-                'Product title is required.'
-            );
-
-        }
-
-    }
-
-
-    /* -----------------------------------------------------
-       B. PRODUCT CATEGORY
-    ----------------------------------------------------- */
-
-    if (!isUpdate || category !== undefined) {
-
-        result.category = String(
-            category || ''
-        )
-            .trim()
-            .toLowerCase();
-
-
-        if (!isValidProductCategory(result.category)) {
-
-            throw new Error(
-                'Invalid product category.'
-            );
-
-        }
-
-    }
-
-
-    /* -----------------------------------------------------
-       C. PRICES
-    ----------------------------------------------------- */
-
-    if (!isUpdate || price !== undefined) {
-
-        const finalPrice = Number(price);
-
-
-        if (
-
-            price === undefined ||
-            price === null ||
-            price === '' ||
-
-            !Number.isFinite(finalPrice) ||
-
-            finalPrice <= 0
-
-        ) {
-
-            throw new Error(
-                'A valid selling price greater than zero is required.'
-            );
-
-        }
-
-
-        result.price = finalPrice;
-
-    }
-
-
-    if (
-        !isUpdate ||
-        originalPrice !== undefined
-    ) {
-
-        if (
-
-            originalPrice === undefined ||
-            originalPrice === null ||
-            originalPrice === ''
-
-        ) {
-
-            result.originalPrice = null;
-
-        } else {
-
-            const finalOriginalPrice =
-                Number(originalPrice);
-
-
-            if (
-
-                !Number.isFinite(finalOriginalPrice) ||
-
-                finalOriginalPrice <= 0
-
-            ) {
-
-                throw new Error(
-                    'Original price must be a valid positive number.'
-                );
-
-            }
-
-
-            result.originalPrice = finalOriginalPrice;
-
-        }
-
-    }
-
-
-    const effectivePrice =
-        result.price;
-
-
-    const effectiveOriginalPrice =
-        result.originalPrice;
-
-
-    if (
-
-        effectivePrice !== undefined &&
-
-        effectiveOriginalPrice !== undefined &&
-
-        effectiveOriginalPrice !== null &&
-
-        effectivePrice > effectiveOriginalPrice
-
-    ) {
-
-        throw new Error(
-            'Original price cannot be lower than the selling price.'
-        );
-
-    }
-
-
-    /* -----------------------------------------------------
-       D. PRODUCT ASSIGNMENTS
-    ----------------------------------------------------- */
-
-    if (
-
-        !isUpdate ||
-
-        placements !== undefined ||
-
-        placement !== undefined ||
-
-        collections !== undefined
-
-    ) {
-
-        const assignments = getSubmittedAssignments({
-
-            placements,
-
-            placement,
-
-            collections,
-
-            category: result.category || category,
-
-            allowLegacyCategoryFallback:
-                !isUpdate &&
-                placements === undefined &&
-                placement === undefined &&
-                collections === undefined &&
-                targetPage === 'homepage'
-
-        });
-
-
-        const invalidCollections =
-            assignments.collections.filter(
-                item => !isValidShopCollection(item)
-            );
-
-
-        if (invalidCollections.length) {
-
-            throw new Error(
-                'One or more Shop collections are invalid.'
-            );
-
-        }
-
-
-        result.placements =
-            assignments.placements;
-
-
-        result.collections =
-            assignments.collections;
-
-
-        if (result.placements.length) {
-
-            result.placement =
-                result.placements[0];
-
-        } else {
-
-            result.placement = 'regular';
-
-        }
-
-    }
-
-
-    /* -----------------------------------------------------
-       E. VISIBILITY
-    ----------------------------------------------------- */
-
-    if (!isUpdate || targetPage !== undefined) {
-
-        const finalTargetPage = String(
-
-            targetPage || 'shop'
-
-        )
-            .trim()
-            .toLowerCase();
-
-
-        if (
-            !['homepage', 'shop'].includes(finalTargetPage)
-        ) {
-
-            throw new Error(
-                'Invalid product destination.'
-            );
-
-        }
-
-
-        result.targetPage = finalTargetPage;
-
-    }
-
-
-    if (
-        !isUpdate ||
-        showInShop !== undefined
-    ) {
-
-        const explicitValue =
-            normaliseBoolean(showInShop);
-
-
-        result.showInShop = explicitValue !== null
-
-            ? explicitValue
-
-            : (
-
-                result.targetPage === 'shop' ||
-
-                (result.placements || []).length > 0 ||
-
-                (result.collections || []).length > 0
-
-            );
-
-    }
-
-
-    if (
-        !isUpdate ||
-        showOnHomepage !== undefined
-    ) {
-
-        const explicitValue =
-            normaliseBoolean(showOnHomepage);
-
-
-        result.showOnHomepage = explicitValue !== null
-
-            ? explicitValue
-
-            : (
-
-                (result.placements || []).length > 0
-
-            );
-
-    }
-
-
-    if (
-        result.collections &&
-        result.collections.length > 0 &&
-        result.showInShop === false
-    ) {
-
-        throw new Error(
-            'Products assigned to Shop collections must be visible in Shop.'
-        );
-
-    }
-
-
-    if (
-        result.placements &&
-        result.placements.length > 0 &&
-        result.showInShop === false
-    ) {
-
-        throw new Error(
-            'Products assigned to homepage product placements must also be visible in Shop.'
-        );
-
-    }
-
-
-    if (result.showOnHomepage === true) {
-
-        if (
-            result.placements &&
-            result.placements.length === 0
-        ) {
-
-            throw new Error(
-                'Select at least one homepage product placement.'
-            );
-
-        }
-
-    }
-
-
-    if (
-
-        result.showInShop === false &&
-
-        result.showOnHomepage === false
-
-    ) {
-
-        throw new Error(
-            'The product must be visible in Shop or on the homepage.'
-        );
-
-    }
-
-
-    /* -----------------------------------------------------
-       F. STOCK STATUS
-    ----------------------------------------------------- */
-
-    if (
-        !isUpdate ||
-        stockStatus !== undefined
-    ) {
-
-        const finalStockStatus = String(
-
-            stockStatus || 'in-stock'
-
-        )
-            .trim()
-            .toLowerCase();
-
-
-        if (
-
-            !['in-stock', 'out-of-stock'].includes(
-                finalStockStatus
-            )
-
-        ) {
-
-            throw new Error(
-                'Invalid stock status.'
-            );
-
-        }
-
-
-        result.stockStatus = finalStockStatus;
-
-    }
-
-
-    /* -----------------------------------------------------
-       G. OPTIONAL TEXT AND ARRAY FIELDS
-    ----------------------------------------------------- */
-
-    const textFields = [
-
-        'description',
-        'brand',
-        'model',
-        'warranty',
-        'demoBatch'
-
-    ];
-
-
-    textFields.forEach(field => {
-
-        if (
-            !isUpdate ||
-            body[field] !== undefined
-        ) {
-
-            result[field] = String(
-                body[field] || ''
-            ).trim();
-
-        }
-
-    });
-
-
-    const arrayFields = [
-
-        'colors',
-        'features'
-
-    ];
-
-
-    arrayFields.forEach(field => {
-
-        if (
-            !isUpdate ||
-            body[field] !== undefined
-        ) {
-
-            result[field] =
-                normaliseArray(body[field]);
-
-        }
-
-    });
-
-
-    if (
-        !isUpdate ||
-        body.specifications !== undefined
-    ) {
-
-        result.specifications =
-            normaliseSpecifications(
-                body.specifications
-            );
-
-    }
-
-
-    if (
-        !isUpdate ||
-        body.detailsVerified !== undefined
-    ) {
-
-        result.detailsVerified =
-            normaliseBoolean(
-                body.detailsVerified
-            ) === true;
-
-    }
-
-
-    if (
-        !isUpdate ||
-        body.isDemo !== undefined
-    ) {
-
-        result.isDemo =
-            normaliseBoolean(
-                body.isDemo
-            ) === true;
-
-    }
-
-
-    return result;
-
-}
-
-
-/* =========================================================
-   20. ENFORCE HOMEPAGE PRODUCT LIMITS
-========================================================= */
-
-async function validateHomepageLimits(
-    placements,
-    excludeProductId = null
-) {
-
-    for (const placement of placements) {
-
-        const filter =
-            homepagePlacementFilter(placement);
-
-
-        if (excludeProductId) {
-
-            filter._id = {
-
-                $ne: excludeProductId
-
-            };
-
-        }
-
-
-        const existingCount =
-            await Product.countDocuments(filter);
-
-
-        if (
-            existingCount >= MAX_HOMEPAGE_PRODUCTS
-        ) {
-
-            const label =
-                CATEGORY_LABELS[placement] ||
-                placement;
-
-
-            throw new Error(
-
-                `${label} already contains the maximum of ` +
-                `${MAX_HOMEPAGE_PRODUCTS} products.`
-
-            );
-
-        }
-
-    }
-
-}
-
-
-/* =========================================================
-   21. ADMIN - CREATE A PRODUCT
+   21. ADMIN - CREATE PRODUCT
 ========================================================= */
 
 router.post(
 
-    '/',
+    "/",
 
     requireAdmin,
 
@@ -2617,62 +2510,55 @@ router.post(
 
             const body = req.body;
 
-
-            /* -------------------------------------------------
-               A. VALIDATE PRODUCT INFORMATION
-            ------------------------------------------------- */
+            /*
+               A. VALIDATE PRODUCT INFORMATION.
+            */
 
             const productData =
                 validateProductData(body);
 
-
-            /* -------------------------------------------------
-               B. VALIDATE IMAGE COUNT
-            ------------------------------------------------- */
+            /*
+               B. CHECK IMAGE COUNT.
+            */
 
             const files = req.files || [];
-
 
             if (files.length > MAX_PRODUCT_IMAGES) {
 
                 return res.status(400).json({
 
                     message:
-                        'A product can have a maximum of four images.'
+                        "A product can have a maximum of four images."
 
                 });
 
             }
 
-
             const existingImage =
-                String(body.image || '').trim();
-
+                String(body.image || "").trim();
 
             if (!files.length && !existingImage) {
 
                 return res.status(400).json({
 
                     message:
-                        'A main product image is required.'
+                        "A main product image is required."
 
                 });
 
             }
 
-
-            /* -------------------------------------------------
-               C. ENFORCE HOMEPAGE PRODUCT LIMITS
-            ------------------------------------------------- */
+            /*
+               C. CHECK HOMEPAGE LIMITS.
+            */
 
             await validateHomepageLimits(
                 productData.placements || []
             );
 
-
-            /* -------------------------------------------------
-               D. UPLOAD IMAGES TO GRIDFS
-            ------------------------------------------------- */
+            /*
+               D. UPLOAD IMAGES.
+            */
 
             if (files.length) {
 
@@ -2684,36 +2570,36 @@ router.post(
                             file,
 
                             {
-                                purpose: 'product-image'
+                                purpose: "product-image"
                             }
 
                         );
-
 
                     uploadedImages.push(uploaded);
 
                 }
 
+                Object.assign(
 
-                const imageData =
+                    productData,
+
                     buildUploadedImageData(
                         req,
                         uploadedImages
-                    );
+                    )
 
-
-                Object.assign(
-                    productData,
-                    imageData
                 );
 
             } else {
 
-                // Legacy URL-based product creation.
+                /*
+                   Legacy URL-based creation.
+                */
+
                 productData.image = existingImage;
 
                 productData.imageFileId = String(
-                    body.imageFileId || ''
+                    body.imageFileId || ""
                 ).trim();
 
                 productData.extraImages =
@@ -2723,47 +2609,37 @@ router.post(
 
             }
 
+            /*
+               E. SAVE PRODUCT.
+            */
 
-            /* -------------------------------------------------
-               E. CREATE DATABASE RECORD
-            ------------------------------------------------- */
-
-            const newProduct = new Product(
-                productData
-            );
-
+            const newProduct =
+                new Product(productData);
 
             await newProduct.save();
 
-
-            /* -------------------------------------------------
-               F. SUCCESS RESPONSE
-            ------------------------------------------------- */
-
             return res.status(201).json({
 
-                message: 'Product created successfully.',
+                message:
+                    "Product created successfully.",
 
                 product: newProduct
 
             });
 
-
         } catch (error) {
 
             console.error(
-                'Error creating product:',
+                "Error creating product:",
                 error
             );
-
 
             await cleanupUploadedImages(
                 uploadedImages
             );
 
-
             if (
-                error.name === 'ValidationError' ||
+                error.name === "ValidationError" ||
                 error.message
             ) {
 
@@ -2771,7 +2647,7 @@ router.post(
 
                     message:
                         error.message ||
-                        'Product validation failed.',
+                        "Product validation failed.",
 
                     errors: error.errors
                         ? Object.values(
@@ -2783,10 +2659,10 @@ router.post(
 
             }
 
-
             return res.status(500).json({
 
-                message: 'Failed to create product.'
+                message:
+                    "Failed to create product."
 
             });
 
@@ -2798,12 +2674,12 @@ router.post(
 
 
 /* =========================================================
-   22. ADMIN - UPDATE A PRODUCT
+   22. ADMIN - UPDATE PRODUCT
 ========================================================= */
 
 router.put(
 
-    '/:id',
+    "/:id",
 
     requireAdmin,
 
@@ -2817,99 +2693,107 @@ router.put(
 
             const { id } = req.params;
 
-
             if (!mongoose.Types.ObjectId.isValid(id)) {
 
                 return res.status(400).json({
 
-                    message: 'Invalid product ID.'
+                    message: "Invalid product ID."
 
                 });
 
             }
 
-
-            const product = await Product.findById(id);
-
+            const product =
+                await Product.findById(id);
 
             if (!product) {
 
                 return res.status(404).json({
 
-                    message: 'Product not found.'
+                    message: "Product not found."
 
                 });
 
             }
 
+            /*
+               A. VALIDATE SUBMITTED DATA.
 
-            /* -------------------------------------------------
-               A. VALIDATE SUBMITTED FIELDS
-            ------------------------------------------------- */
+               Existing product data is supplied so
+               omitted assignments can be preserved.
+            */
 
             const updates =
                 validateProductData(
+
                     req.body,
-                    true
+
+                    true,
+
+                    product
+
                 );
 
 
-            /* -------------------------------------------------
-               B. PRESERVE EXISTING ASSIGNMENTS WHEN OMITTED
-            ------------------------------------------------- */
+            /*
+               B. PRESERVE ASSIGNMENTS WHEN OMITTED.
+            */
 
-            if (
-                updates.placements === undefined
-            ) {
+            if (updates.placements === undefined) {
 
                 updates.placements =
-                    product.placements.filter(
-                        item => isValidHomepagePlacement(item)
-                    );
+                    getExistingHomepagePlacements(product);
 
             }
 
-
-            if (
-                updates.collections === undefined
-            ) {
+            if (updates.collections === undefined) {
 
                 updates.collections =
                     getProductCollections(product);
 
             }
 
-
-            if (
-                updates.placement === undefined
-            ) {
+            if (updates.placement === undefined) {
 
                 updates.placement =
-                    updates.placements[0] ||
-                    'regular';
+                    updates.placements[0] || "regular";
 
             }
 
 
-            /* -------------------------------------------------
-               C. VALIDATE HOMEPAGE LIMITS
-            ------------------------------------------------- */
+            /*
+               C. CHECK ONLY NEW HOMEPAGE ASSIGNMENTS.
 
-            await validateHomepageLimits(
+               Editing descriptions, prices or other fields
+               must not be blocked by an existing full section.
+            */
 
-                updates.placements,
+            const oldPlacements =
+                getExistingHomepagePlacements(product);
 
-                product._id
+            const newPlacements =
+                updates.placements.filter(
+                    item => !oldPlacements.includes(item)
+                );
 
-            );
+            if (newPlacements.length) {
+
+                await validateHomepageLimits(
+
+                    newPlacements,
+
+                    product._id
+
+                );
+
+            }
 
 
-            /* -------------------------------------------------
-               D. PRESERVE EXISTING IMAGE INFORMATION
-            ------------------------------------------------- */
+            /*
+               D. PRESERVE OLD IMAGE IDENTIFIERS.
+            */
 
             const oldImageIds = [];
-
 
             if (product.imageFileId) {
 
@@ -2919,16 +2803,11 @@ router.put(
 
             }
 
-
             if (Array.isArray(product.extraImages)) {
 
                 product.extraImages.forEach(image => {
 
-                    if (
-                        image &&
-                        typeof image === 'object' &&
-                        image.fileId
-                    ) {
+                    if (image && image.fileId) {
 
                         oldImageIds.push(
                             image.fileId
@@ -2941,12 +2820,11 @@ router.put(
             }
 
 
-            /* -------------------------------------------------
-               E. REPLACE IMAGES IF NEW FILES ARE UPLOADED
-            ------------------------------------------------- */
+            /*
+               E. PROCESS NEW IMAGES.
+            */
 
             const files = req.files || [];
-
 
             if (files.length) {
 
@@ -2958,7 +2836,8 @@ router.put(
                             file,
 
                             {
-                                purpose: 'product-image',
+
+                                purpose: "product-image",
 
                                 productId: id
 
@@ -2966,58 +2845,47 @@ router.put(
 
                         );
 
-
                     uploadedImages.push(uploaded);
 
                 }
 
+                Object.assign(
 
-                const imageData =
+                    updates,
+
                     buildUploadedImageData(
                         req,
                         uploadedImages
-                    );
+                    )
 
-
-                Object.assign(
-                    updates,
-                    imageData
                 );
 
             } else {
 
                 /*
-                   When no new image files are submitted,
-                   preserve the existing product images.
-
-                   Explicit image URL updates remain supported.
+                   Preserve existing image information
+                   unless the request explicitly changes it.
                 */
 
                 if (req.body.image !== undefined) {
 
                     updates.image =
                         String(
-                            req.body.image || ''
+                            req.body.image || ""
                         ).trim();
 
                 }
 
-
-                if (
-                    req.body.imageFileId !== undefined
-                ) {
+                if (req.body.imageFileId !== undefined) {
 
                     updates.imageFileId =
                         String(
-                            req.body.imageFileId || ''
+                            req.body.imageFileId || ""
                         ).trim();
 
                 }
 
-
-                if (
-                    req.body.extraImages !== undefined
-                ) {
+                if (req.body.extraImages !== undefined) {
 
                     updates.extraImages =
                         normaliseExtraImages(
@@ -3029,50 +2897,73 @@ router.put(
             }
 
 
-            /* -------------------------------------------------
-               F. APPLY PRODUCT UPDATES
-            ------------------------------------------------- */
+            /*
+               F. APPLY UPDATES.
+            */
 
             Object.assign(
-
                 product,
-
                 updates
-
             );
 
 
-            await product.save();
+            /*
+               Final visibility safeguard.
+            */
 
+            if (
+                (
+                    product.placements.length > 0 ||
+                    product.collections.length > 0
+                ) &&
+                product.showInShop === false
+            ) {
 
-            /* -------------------------------------------------
-               G. DELETE OLD IMAGES AFTER SUCCESSFUL SAVE
-            ------------------------------------------------- */
+                throw new Error(
+                    "Products assigned to homepage placements or Shop collections must be visible in Shop."
+                );
 
-            const newImageIds = [];
+            }
 
+            if (
+                product.showOnHomepage === true &&
+                product.placements.length === 0
+            ) {
 
-            if (product.imageFileId) {
-
-                newImageIds.push(
-                    product.imageFileId
+                throw new Error(
+                    "A homepage-visible product must have at least one homepage placement."
                 );
 
             }
 
 
+            await product.save();
+
+
+            /*
+               G. DELETE REPLACED OLD IMAGES.
+
+               Only delete files that are no longer referenced.
+            */
+
+            const newImageIds = [];
+
+            if (product.imageFileId) {
+
+                newImageIds.push(
+                    String(product.imageFileId)
+                );
+
+            }
+
             if (Array.isArray(product.extraImages)) {
 
                 product.extraImages.forEach(image => {
 
-                    if (
-                        image &&
-                        typeof image === 'object' &&
-                        image.fileId
-                    ) {
+                    if (image && image.fileId) {
 
                         newImageIds.push(
-                            image.fileId
+                            String(image.fileId)
                         );
 
                     }
@@ -3081,17 +2972,11 @@ router.put(
 
             }
 
+            const retainedIds = new Set(newImageIds);
 
-            const retainedIds = new Set(
-                newImageIds.map(String)
-            );
+            for (const oldId of unique(oldImageIds.map(String))) {
 
-
-            for (const oldId of oldImageIds) {
-
-                if (
-                    !retainedIds.has(String(oldId))
-                ) {
+                if (!retainedIds.has(oldId)) {
 
                     await deleteGridFSImage(oldId);
 
@@ -3099,34 +2984,45 @@ router.put(
 
             }
 
-
             return res.status(200).json({
 
-                message: 'Product updated successfully.',
+                message:
+                    "Product updated successfully.",
 
                 product
 
             });
 
-
         } catch (error) {
 
             console.error(
-                'Error updating product:',
+                "Error updating product:",
                 error
             );
-
 
             await cleanupUploadedImages(
                 uploadedImages
             );
 
+            if (
+                error.name === "ValidationError" ||
+                error.message
+            ) {
 
-            return res.status(400).json({
+                return res.status(400).json({
+
+                    message:
+                        error.message ||
+                        "Product validation failed."
+
+                });
+
+            }
+
+            return res.status(500).json({
 
                 message:
-                    error.message ||
-                    'Failed to update product.'
+                    "Failed to update product."
 
             });
 
@@ -3138,12 +3034,12 @@ router.put(
 
 
 /* =========================================================
-   23. ADMIN - DELETE A PRODUCT
+   23. ADMIN - DELETE PRODUCT
 ========================================================= */
 
 router.delete(
 
-    '/:id',
+    "/:id",
 
     requireAdmin,
 
@@ -3153,65 +3049,61 @@ router.delete(
 
             const { id } = req.params;
 
-
             if (!mongoose.Types.ObjectId.isValid(id)) {
 
                 return res.status(400).json({
 
-                    message: 'Invalid product ID.'
+                    message: "Invalid product ID."
 
                 });
 
             }
 
-
             const product =
                 await Product.findById(id);
-
 
             if (!product) {
 
                 return res.status(404).json({
 
-                    message: 'Product not found.'
+                    message: "Product not found."
 
                 });
 
             }
 
-
             /*
-               Delete the product record first.
-
-               Then clean up associated GridFS files.
+               Delete the database record.
             */
 
             await Product.findByIdAndDelete(id);
 
+            /*
+               Clean up associated GridFS images.
+            */
 
             await deleteProductImages(product);
 
-
             return res.status(200).json({
 
-                message: 'Product deleted successfully.',
+                message:
+                    "Product deleted successfully.",
 
                 productId: id
 
             });
 
-
         } catch (error) {
 
             console.error(
-                'Error deleting product:',
+                "Error deleting product:",
                 error
             );
 
-
             return res.status(500).json({
 
-                message: 'Failed to delete product.'
+                message:
+                    "Failed to delete product."
 
             });
 
