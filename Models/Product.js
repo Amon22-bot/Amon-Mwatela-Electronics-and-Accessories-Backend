@@ -1,3 +1,4 @@
+
 /* =========================================================
    AM ELECTRONICS AND ACCESSORIES
    PRODUCT DATABASE MODEL
@@ -34,29 +35,71 @@ const PRODUCT_CATEGORIES = [
 
 
 /* =========================================================
-   2. HOMEPAGE PLACEMENTS
+   2. HOMEPAGE PRODUCT PLACEMENTS
 ========================================================= */
 
-const HOMEPAGE_PLACEMENTS = [
+const HOMEPAGE_PRODUCT_PLACEMENTS = [
     'top-selling',
-    'covers',
     'new-arrivals',
+    'covers',
     'screen-protectors',
     'headphones-earpods',
     'smartwatches',
     'chargers-cables',
-
-    // Additional supported placements
-    'trending',
-    'featured',
-    'recommended',
-    'explore',
-    'must-have'
+    'power-banks'
 ];
 
 
 /* =========================================================
-   3. PRODUCT SCHEMA
+   3. ADDITIONAL SHOP COLLECTIONS
+========================================================= */
+
+const ADDITIONAL_SHOP_COLLECTIONS = [
+    'trending',
+    'featured',
+    'recommended',
+    'must-have',
+    'explore'
+];
+
+
+/* =========================================================
+   4. ALL PRODUCT COLLECTION PLACEMENTS
+========================================================= */
+
+const HOMEPAGE_PLACEMENTS = [
+    ...HOMEPAGE_PRODUCT_PLACEMENTS,
+    ...ADDITIONAL_SHOP_COLLECTIONS
+];
+
+
+/* =========================================================
+   5. PRODUCT IMAGE SUBDOCUMENT
+========================================================= */
+
+const ProductImageSchema = new mongoose.Schema({
+
+    // IMAGE URL
+    url: {
+        type: String,
+        required: true,
+        trim: true
+    },
+
+    // IMAGE STORAGE IDENTIFIER
+    publicId: {
+        type: String,
+        trim: true,
+        default: ''
+    }
+
+}, {
+    _id: false
+});
+
+
+/* =========================================================
+   6. PRODUCT SCHEMA
 ========================================================= */
 
 const ProductSchema = new mongoose.Schema({
@@ -95,11 +138,29 @@ const ProductSchema = new mongoose.Schema({
     },
 
 
-    // PRODUCT IMAGE PATH
+    // MAIN PRODUCT IMAGE
+    // Retained for existing frontend compatibility.
     image: {
         type: String,
         required: true,
         trim: true
+    },
+
+
+    // ADDITIONAL PRODUCT IMAGES
+    // Maximum 3 additional images.
+    // Including the main image, maximum is 4.
+    extraImages: {
+        type: [ProductImageSchema],
+        default: [],
+        validate: {
+            validator: function (images) {
+                return Array.isArray(images) &&
+                    images.length <= 3;
+            },
+            message:
+                'A product can have a maximum of 3 additional images.'
+        }
     },
 
 
@@ -137,13 +198,6 @@ const ProductSchema = new mongoose.Schema({
 
     // AVAILABLE COLORS
     colors: {
-        type: [String],
-        default: []
-    },
-
-
-    // ADDITIONAL PRODUCT IMAGES
-    extraImages: {
         type: [String],
         default: []
     },
@@ -196,7 +250,9 @@ const ProductSchema = new mongoose.Schema({
     },
 
 
-    // MULTIPLE HOMEPAGE PLACEMENTS
+    // PRODUCT COLLECTION ASSIGNMENTS
+    // Supports the eight homepage product placements
+    // and the five additional Shop collections.
     placements: {
         type: [{
             type: String,
@@ -249,12 +305,12 @@ const ProductSchema = new mongoose.Schema({
 
 
 /* =========================================================
-   4. PRICE VALIDATION AND PLACEMENT CLEANUP
+   7. PRICE VALIDATION AND PLACEMENT CLEANUP
 ========================================================= */
 
 ProductSchema.pre('validate', function () {
 
-    // Selling price cannot exceed the original price.
+    // Selling price cannot exceed original price.
     if (
         this.originalPrice !== null &&
         this.originalPrice !== undefined &&
@@ -269,18 +325,30 @@ ProductSchema.pre('validate', function () {
     }
 
 
-    // Remove duplicate homepage placements.
+    // Remove duplicate collection assignments.
     if (Array.isArray(this.placements)) {
         this.placements = [
             ...new Set(this.placements)
         ];
     }
 
+
+    // Validate maximum additional images.
+    if (
+        Array.isArray(this.extraImages) &&
+        this.extraImages.length > 3
+    ) {
+        this.invalidate(
+            'extraImages',
+            'A product can have a maximum of 3 additional images.'
+        );
+    }
+
 });
 
 
 /* =========================================================
-   5. DISCOUNT PERCENTAGE VIRTUAL
+   8. DISCOUNT PERCENTAGE VIRTUAL
 ========================================================= */
 
 ProductSchema.virtual('discountPercentage').get(function () {
@@ -305,7 +373,7 @@ ProductSchema.virtual('discountPercentage').get(function () {
 
 
 /* =========================================================
-   6. JSON AND OBJECT VIRTUALS
+   9. JSON AND OBJECT VIRTUALS
 ========================================================= */
 
 ProductSchema.set('toJSON', {
@@ -318,7 +386,7 @@ ProductSchema.set('toObject', {
 
 
 /* =========================================================
-   7. DATABASE INDEXES
+   10. DATABASE INDEXES
 ========================================================= */
 
 ProductSchema.index({
@@ -335,7 +403,7 @@ ProductSchema.index({
 
 
 /* =========================================================
-   8. EXPORT PRODUCT MODEL
+   11. EXPORT PRODUCT MODEL
 ========================================================= */
 
 module.exports =
