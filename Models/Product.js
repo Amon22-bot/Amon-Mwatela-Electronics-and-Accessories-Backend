@@ -1,4 +1,4 @@
-```javascript
+
 /* =========================================================
    AM ELECTRONICS AND ACCESSORIES
    PRODUCT DATABASE MODEL
@@ -835,4 +835,3 @@ module.exports =
         ProductSchema
 
     );
-```
