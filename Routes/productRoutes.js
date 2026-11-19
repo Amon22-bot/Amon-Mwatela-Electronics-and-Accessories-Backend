@@ -1,4 +1,3 @@
-
 /* =========================================================
    AM ELECTRONICS - PRODUCT ROUTES
    ---------------------------------------------------------
@@ -19,6 +18,7 @@
    - placements = homepage sections where the product appears
    - A product can appear in Shop and in multiple homepage sections
    - An empty placements array means the product appears only in Shop
+   - Shop badges are not supported.
 ========================================================= */
 
 const express = require('express');
@@ -42,8 +42,6 @@ const MAX_HOMEPAGE_PRODUCTS = 10;
 
    Legacy placements are retained where they may still be
    needed by existing records or older frontend sections.
-
-   "you-may-like" has been removed.
 */
 
 const HOMEPAGE_CATEGORIES = [
@@ -342,23 +340,6 @@ function getSubmittedPlacements({
    3. HOMEPAGE PRODUCT FILTER
 ========================================================= */
 
-
-/*
-   Supports both current and older product records.
-
-   Current records:
-       showOnHomepage: true
-       placements: ["top-selling"]
-
-   Older records may use:
-       targetPage: "homepage"
-       placement: "top-selling"
-
-   Some older records may only have:
-       targetPage: "homepage"
-       category: "covers"
-*/
-
 function homepagePlacementFilter(placement) {
     return {
         $or: [
@@ -429,16 +410,6 @@ function homepagePlacementFilter(placement) {
    4. SHOP PRODUCT FILTER
 ========================================================= */
 
-
-/*
-   Shop should include:
-   - Current products with showInShop: true
-   - Legacy Shop products with targetPage: "shop"
-   - Older products without targetPage or showInShop
-
-   Products can appear in both Shop and homepage sections.
-*/
-
 function shopProductsFilter() {
     return {
         $or: [
@@ -468,14 +439,6 @@ function shopProductsFilter() {
    5. GET ALL SHOP PRODUCTS
 ========================================================= */
 
-/*
-   GET /api/products
-
-   Returns all products available in the Shop.
-
-   Homepage placement does not remove a product from Shop.
-*/
-
 router.get('/', async (req, res) => {
     try {
         const products = await Product.find(
@@ -500,17 +463,6 @@ router.get('/', async (req, res) => {
 /* =========================================================
    6. GET HOMEPAGE PRODUCTS BY PLACEMENT
 ========================================================= */
-
-/*
-   GET /api/products/homepage/:category
-
-   Examples:
-       /api/products/homepage/top-selling
-       /api/products/homepage/new-arrivals
-       /api/products/homepage/covers
-
-   Maximum of 10 products per homepage placement.
-*/
 
 router.get('/homepage/:category', async (req, res) => {
     try {
@@ -549,20 +501,6 @@ router.get('/homepage/:category', async (req, res) => {
 /* =========================================================
    7. GET PRODUCTS BY ACTUAL PRODUCT CATEGORY
 ========================================================= */
-
-/*
-   GET /api/products/category/:category
-
-   Examples:
-       /api/products/category/power-banks
-       /api/products/category/gaming-accessories
-       /api/products/category/photography-lighting
-
-   This route filters by the actual product category,
-   not by homepage placement.
-
-   Shop category results are not limited to 10.
-*/
 
 router.get('/category/:category', async (req, res) => {
     try {
@@ -604,21 +542,6 @@ router.get('/category/:category', async (req, res) => {
 /* =========================================================
    8. SEARCH PRODUCTS
 ========================================================= */
-
-/*
-   GET /api/products/search?q=phone
-
-   Searches:
-   - Product title
-   - Description
-   - Brand
-   - Model
-   - Actual category
-   - Legacy placement
-   - Homepage placements
-
-   Search results are restricted to Shop products.
-*/
 
 router.get('/search', async (req, res) => {
     try {
@@ -687,17 +610,6 @@ router.get('/search', async (req, res) => {
    9. ADMIN - GET ALL PRODUCTS
 ========================================================= */
 
-/*
-   GET /api/products/admin/list
-
-   Returns all products, including:
-   - Shop-only products
-   - Homepage products
-   - Products appearing in both places
-
-   Requires administrator authentication.
-*/
-
 router.get('/admin/list', requireAdmin, async (req, res) => {
     try {
         const products = await Product.find({})
@@ -721,15 +633,6 @@ router.get('/admin/list', requireAdmin, async (req, res) => {
 /* =========================================================
    10. GET A SINGLE PRODUCT
 ========================================================= */
-
-/*
-   GET /api/products/:id
-
-   Used by the product details page.
-
-   This route is deliberately placed after the more specific
-   routes such as /search, /category and /homepage.
-*/
 
 router.get('/:id', async (req, res) => {
     try {
@@ -766,41 +669,6 @@ router.get('/:id', async (req, res) => {
    11. ADMIN - CREATE A PRODUCT
 ========================================================= */
 
-/*
-   POST /api/products
-
-   Compatible with the updated admin.js form.
-
-   Expected fields include:
-
-   {
-       title,
-       category,
-       placements: [],
-       price,
-       originalPrice,
-       description,
-       image,
-       inStock,
-       brand,
-       model,
-       colors: [],
-       features: [],
-       specifications: [],
-       warranty,
-       detailsVerified
-   }
-
-   Important behaviour:
-
-   - Actual category is stored in category.
-   - Homepage sections are stored in placements.
-   - Products remain available in Shop by default.
-   - Products with placements are also available on homepage.
-   - Description is optional.
-   - inStock is converted to stockStatus.
-*/
-
 router.post('/', requireAdmin, async (req, res) => {
     try {
         const {
@@ -821,8 +689,6 @@ router.post('/', requireAdmin, async (req, res) => {
 
             stockStatus,
             inStock,
-
-            shopBadge,
 
             brand,
             model,
@@ -939,15 +805,6 @@ router.post('/', requireAdmin, async (req, res) => {
             : 'shop';
 
 
-        /*
-           Resolve submitted placements after validating
-           the actual product category.
-
-           This is important because the new admin form
-           sends placements but does not send targetPage
-           or showOnHomepage.
-        */
-
         const submittedPlacements = getSubmittedPlacements({
             placements,
             placement,
@@ -959,12 +816,6 @@ router.post('/', requireAdmin, async (req, res) => {
                 finalTargetPage === 'homepage'
         });
 
-
-        /*
-           Products are available in Shop by default.
-
-           An explicit showInShop value takes precedence.
-        */
 
         const explicitShowInShop = normaliseBoolean(
             showInShop
@@ -979,15 +830,6 @@ router.post('/', requireAdmin, async (req, res) => {
                 submittedPlacements.length > 0
             );
 
-
-        /*
-           If showOnHomepage was explicitly supplied,
-           respect it.
-
-           Otherwise, infer homepage visibility from:
-           - targetPage === "homepage"
-           - One or more submitted placements
-        */
 
         const explicitShowOnHomepage = normaliseBoolean(
             showOnHomepage
@@ -1030,12 +872,10 @@ router.post('/', requireAdmin, async (req, res) => {
                 });
             }
 
+
             /*
                Enforce the maximum of 10 products in each
                selected homepage placement.
-
-               The count uses the same compatibility filter
-               as the homepage loading endpoint.
             */
 
             for (const selectedPlacement of finalPlacements) {
@@ -1059,13 +899,6 @@ router.post('/', requireAdmin, async (req, res) => {
             }
         }
 
-
-        /*
-           A product must be visible somewhere.
-
-           The updated admin form normally keeps products
-           in Shop, including products assigned to homepage.
-        */
 
         if (!finalShowInShop && !finalShowOnHomepage) {
             return res.status(400).json({
@@ -1159,13 +992,7 @@ router.post('/', requireAdmin, async (req, res) => {
 
             image: finalImage,
 
-            /*
-               Keep the singular placement field for older
-               frontend code and existing product records.
-
-               New code should use the placements array.
-            */
-
+            // Keep legacy placement compatibility.
             placement: finalPlacements.length > 0
                 ? finalPlacements[0]
                 : 'regular',
@@ -1179,10 +1006,6 @@ router.post('/', requireAdmin, async (req, res) => {
             showOnHomepage: finalShowOnHomepage,
 
             stockStatus: finalStockStatus,
-
-            shopBadge: String(
-                shopBadge || ''
-            ).trim(),
 
             brand: finalBrand,
 
@@ -1252,12 +1075,6 @@ router.post('/', requireAdmin, async (req, res) => {
    12. ADMIN - DELETE A PRODUCT
 ========================================================= */
 
-/*
-   DELETE /api/products/:id
-
-   Requires administrator authentication.
-*/
-
 router.delete('/:id', requireAdmin, async (req, res) => {
     try {
         const { id } = req.params;
@@ -1297,7 +1114,3 @@ router.delete('/:id', requireAdmin, async (req, res) => {
 ========================================================= */
 
 module.exports = router;
-
-
-
-
