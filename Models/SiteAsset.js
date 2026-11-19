@@ -22,7 +22,8 @@ const mongoose = require('mongoose');
 const ASSET_TYPES = [
     'logo',
     'hero',
-    'category'
+    'category',
+    'collection'
 ];
 
 
