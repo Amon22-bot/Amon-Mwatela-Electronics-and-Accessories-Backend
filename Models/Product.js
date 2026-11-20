@@ -3,18 +3,15 @@
    AM ELECTRONICS AND ACCESSORIES
    PRODUCT DATABASE MODEL
 
-   File: Models/Product.js
-
    RESPONSIBILITIES:
    1. Define actual product categories.
    2. Define eight homepage product placements.
    3. Define five additional Shop collections.
-   4. Support products assigned to multiple placements.
-   5. Support products assigned to multiple collections.
-   6. Support up to four product images.
-   7. Prepare image references for MongoDB GridFS.
-   8. Preserve compatibility with legacy product records.
-   9. Validate product prices and assignments.
+   4. Support multiple placements and collections.
+   5. Support up to four product images.
+   6. Prepare image references for MongoDB GridFS.
+   7. Preserve compatibility with legacy product records.
+   8. Validate product prices and assignments.
 ========================================================= */
 
 const mongoose = require('mongoose');
@@ -22,6 +19,14 @@ const mongoose = require('mongoose');
 
 /* =========================================================
    1. ACTUAL PRODUCT CATEGORIES
+
+   These describe what a product actually is.
+
+   Ring lights       -> photography-lighting
+   Bluetooth speakers -> audio-sound
+
+   Phones, ring-lights and bluetooth-speakers are NOT
+   standalone product categories.
 ========================================================= */
 
 const PRODUCT_CATEGORIES = [
@@ -32,20 +37,12 @@ const PRODUCT_CATEGORIES = [
     'smartwatches',
     'chargers-cables',
 
-    'phones',
-    'bluetooth-speakers',
-    'ring-lights',
-
     'gaming-accessories',
     'photography-lighting',
     'audio-sound',
     'storage-memory',
     'computer-accessories',
-    'power-banks',
-
-    // Legacy compatibility.
-    'top-selling',
-    'new-arrivals'
+    'power-banks'
 
 ];
 
@@ -53,8 +50,7 @@ const PRODUCT_CATEGORIES = [
 /* =========================================================
    2. HOMEPAGE PRODUCT PLACEMENTS
 
-   These are the ONLY eight homepage product sections
-   that display products through product carousels.
+   These are the ONLY eight homepage product sections.
 
    Maximum: 10 products per placement.
 ========================================================= */
@@ -78,9 +74,7 @@ const HOMEPAGE_PRODUCT_PLACEMENTS = [
 
    These are independent Shop destinations.
 
-   They are NOT homepage product placements.
-
-   Products may belong to multiple collections.
+   They are NOT product categories or homepage placements.
 ========================================================= */
 
 const ADDITIONAL_SHOP_COLLECTIONS = [
@@ -96,14 +90,6 @@ const ADDITIONAL_SHOP_COLLECTIONS = [
 
 /* =========================================================
    4. LEGACY COLLECTION VALUES
-
-   Older product records may contain these values inside
-   the placements field.
-
-   They remain temporarily accepted to prevent existing
-   records from failing validation when updated.
-
-   New assignments should use the collections field.
 ========================================================= */
 
 const LEGACY_COLLECTION_VALUES = [
@@ -116,13 +102,14 @@ const LEGACY_COLLECTION_VALUES = [
 /* =========================================================
    5. LEGACY PLACEMENT COMPATIBILITY
 
-   This combined list is used ONLY to allow older records
-   to remain valid during the transition.
+   Existing records may contain Shop collection values
+   inside the old placements field.
 
-   New homepage assignments must use the eight values in
-   HOMEPAGE_PRODUCT_PLACEMENTS.
+   These values remain accepted for compatibility.
 
-   New Shop collection assignments must use collections.
+   New assignments must use:
+   - placements for homepage sections.
+   - collections for additional Shop collections.
 ========================================================= */
 
 const LEGACY_COMPATIBLE_PLACEMENTS = [
@@ -136,38 +123,22 @@ const LEGACY_COMPATIBLE_PLACEMENTS = [
 
 /* =========================================================
    6. PRODUCT IMAGE SUBDOCUMENT
-
-   Additional product images.
-
-   Each additional image stores:
-   - url: Public image URL.
-   - fileId: MongoDB GridFS file identifier.
-   - publicId: Legacy image identifier.
-
-   Maximum: Three additional images.
 ========================================================= */
 
 const ProductImageSchema = new mongoose.Schema({
 
-    // PUBLIC IMAGE URL.
     url: {
         type: String,
         required: true,
         trim: true
     },
 
-
-    // GRIDFS FILE IDENTIFIER.
-    // Stored as a string for convenient URL handling.
     fileId: {
         type: String,
         trim: true,
         default: ''
     },
 
-
-    // LEGACY IMAGE IDENTIFIER.
-    // Retained for compatibility with existing records.
     publicId: {
         type: String,
         trim: true,
@@ -194,50 +165,35 @@ const ProductSchema = new mongoose.Schema({
     title: {
 
         type: String,
-
         required: true,
-
         trim: true,
-
         maxlength: 150
 
     },
 
-
     description: {
 
         type: String,
-
         trim: true,
-
         default: '',
-
         maxlength: 5000
 
     },
 
-
     brand: {
 
         type: String,
-
         trim: true,
-
         maxlength: 100,
-
         default: ''
 
     },
 
-
     model: {
 
         type: String,
-
         trim: true,
-
         maxlength: 100,
-
         default: ''
 
     },
@@ -245,26 +201,25 @@ const ProductSchema = new mongoose.Schema({
 
     /* -----------------------------------------------------
        B. PRODUCT PRICING
+
+       Original price is optional.
+
+       Products without discounts should store null.
     ----------------------------------------------------- */
 
     originalPrice: {
 
         type: Number,
-
         default: null,
-
         min: 0
 
     },
 
-
     price: {
 
         type: Number,
-
         required: true,
-
-        min: 0
+        min: 0.01
 
     },
 
@@ -279,35 +234,25 @@ const ProductSchema = new mongoose.Schema({
        Additional images:
        - extraImages
 
-       Total maximum: FOUR images.
+       Maximum total: FOUR images.
     ----------------------------------------------------- */
 
-    // MAIN PRODUCT IMAGE URL.
-    // Retained for existing frontend compatibility.
     image: {
 
         type: String,
-
         required: true,
-
         trim: true
 
     },
 
-
-    // MAIN IMAGE GRIDFS IDENTIFIER.
     imageFileId: {
 
         type: String,
-
         trim: true,
-
         default: ''
 
     },
 
-
-    // ADDITIONAL PRODUCT IMAGES.
     extraImages: {
 
         type: [ProductImageSchema],
@@ -340,47 +285,36 @@ const ProductSchema = new mongoose.Schema({
     features: {
 
         type: [String],
-
         default: []
 
     },
-
 
     specifications: {
 
         type: [mongoose.Schema.Types.Mixed],
-
         default: []
 
     },
-
 
     colors: {
 
         type: [String],
-
         default: []
 
     },
 
-
     warranty: {
 
         type: String,
-
         trim: true,
-
         maxlength: 300,
-
         default: ''
 
     },
 
-
     detailsVerified: {
 
         type: Boolean,
-
         default: false
 
     },
@@ -393,20 +327,15 @@ const ProductSchema = new mongoose.Schema({
     isDemo: {
 
         type: Boolean,
-
         default: false,
-
         index: true
 
     },
 
-
     demoBatch: {
 
         type: String,
-
         trim: true,
-
         default: ''
 
     },
@@ -414,35 +343,21 @@ const ProductSchema = new mongoose.Schema({
 
     /* -----------------------------------------------------
        F. ACTUAL PRODUCT CATEGORY
-
-       This represents what the product actually is.
-
-       Example:
-       headphones-earpods
-       gaming-accessories
-       power-banks
     ----------------------------------------------------- */
 
     category: {
 
         type: String,
 
-        default: null,
+        required: true,
 
-        enum: [
-            null,
-            ...PRODUCT_CATEGORIES
-        ]
+        enum: PRODUCT_CATEGORIES
 
     },
 
 
     /* -----------------------------------------------------
        G. PRODUCT DESTINATION
-
-       Retained for existing frontend/backend behaviour.
-
-       New visibility logic will be handled by routes.
     ----------------------------------------------------- */
 
     targetPage: {
@@ -463,15 +378,6 @@ const ProductSchema = new mongoose.Schema({
 
     /* -----------------------------------------------------
        H. HOMEPAGE PRODUCT PLACEMENTS
-
-       The eight homepage product carousel sections.
-
-       A product may belong to multiple placements.
-
-       New assignments must use only these eight values.
-
-       Legacy collection values remain temporarily accepted
-       to preserve older product records.
     ----------------------------------------------------- */
 
     placements: {
@@ -491,17 +397,6 @@ const ProductSchema = new mongoose.Schema({
 
     /* -----------------------------------------------------
        I. ADDITIONAL SHOP COLLECTIONS
-
-       These are independent of homepage placements.
-
-       Available collections:
-       - trending
-       - featured
-       - recommended
-       - must-have
-       - explore
-
-       A product may belong to multiple collections.
     ----------------------------------------------------- */
 
     collections: {
@@ -521,10 +416,6 @@ const ProductSchema = new mongoose.Schema({
 
     /* -----------------------------------------------------
        J. LEGACY SINGLE PLACEMENT
-
-       Retained for older products and frontend compatibility.
-
-       New product assignments should use placements.
     ----------------------------------------------------- */
 
     placement: {
@@ -551,16 +442,13 @@ const ProductSchema = new mongoose.Schema({
     showInShop: {
 
         type: Boolean,
-
         default: true
 
     },
 
-
     showOnHomepage: {
 
         type: Boolean,
-
         default: false
 
     },
@@ -593,7 +481,6 @@ const ProductSchema = new mongoose.Schema({
     createdAt: {
 
         type: Date,
-
         default: Date.now
 
     }
@@ -608,34 +495,50 @@ const ProductSchema = new mongoose.Schema({
 ProductSchema.pre('validate', function () {
 
     /* -----------------------------------------------------
-       A. Validate selling price against original price.
+       A. ORIGINAL PRICE VALIDATION
     ----------------------------------------------------- */
 
     if (
 
         this.originalPrice !== null &&
-        this.originalPrice !== undefined &&
-
-        this.price !== null &&
-        this.price !== undefined &&
-
-        this.price > this.originalPrice
+        this.originalPrice !== undefined
 
     ) {
 
-        this.invalidate(
+        if (
 
-            'price',
+            !Number.isFinite(this.originalPrice) ||
+            this.originalPrice <= 0
 
-            'The selling price cannot exceed the original price.'
+        ) {
 
-        );
+            this.invalidate(
+                'originalPrice',
+                'Original price must be a valid positive number.'
+            );
+
+        }
+
+        else if (
+
+            this.price !== null &&
+            this.price !== undefined &&
+            this.price >= this.originalPrice
+
+        ) {
+
+            this.invalidate(
+                'originalPrice',
+                'Original price must be greater than the selling price.'
+            );
+
+        }
 
     }
 
 
     /* -----------------------------------------------------
-       B. Remove duplicate homepage placements.
+       B. REMOVE DUPLICATE HOMEPAGE PLACEMENTS
     ----------------------------------------------------- */
 
     if (Array.isArray(this.placements)) {
@@ -650,7 +553,7 @@ ProductSchema.pre('validate', function () {
 
 
     /* -----------------------------------------------------
-       C. Remove duplicate Shop collections.
+       C. REMOVE DUPLICATE SHOP COLLECTIONS
     ----------------------------------------------------- */
 
     if (Array.isArray(this.collections)) {
@@ -665,25 +568,15 @@ ProductSchema.pre('validate', function () {
 
 
     /* -----------------------------------------------------
-       D. Remove duplicate legacy placement values.
+       D. LEGACY PLACEMENT COMPATIBILITY
+
+       Legacy collection values are deliberately retained.
+       New records should use the collections field.
     ----------------------------------------------------- */
-
-    if (
-
-        Array.isArray(this.placements) &&
-        this.placements.length > 0
-
-    ) {
-
-        // Do not automatically migrate legacy collection
-        // values here. That operation belongs in the routes
-        // so existing records can be migrated deliberately.
-
-    }
 
 
     /* -----------------------------------------------------
-       E. Validate maximum additional images.
+       E. MAXIMUM ADDITIONAL IMAGE VALIDATION
     ----------------------------------------------------- */
 
     if (
@@ -764,37 +657,28 @@ ProductSchema.set('toObject', {
    11. DATABASE INDEXES
 ========================================================= */
 
-// Homepage product retrieval.
 ProductSchema.index({
 
     targetPage: 1,
-
     placements: 1,
-
     createdAt: -1
 
 });
 
 
-// Actual product category retrieval.
 ProductSchema.index({
 
     targetPage: 1,
-
     category: 1,
-
     createdAt: -1
 
 });
 
 
-// Additional Shop collection retrieval.
 ProductSchema.index({
 
     showInShop: 1,
-
     collections: 1,
-
     createdAt: -1
 
 });
@@ -802,9 +686,6 @@ ProductSchema.index({
 
 /* =========================================================
    12. EXPOSE MODEL CONFIGURATION
-
-   Allows backend routes to use the same approved lists
-   instead of maintaining duplicate configuration arrays.
 ========================================================= */
 
 ProductSchema.statics.PRODUCT_CATEGORIES =
